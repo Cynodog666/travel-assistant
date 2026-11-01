@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>坤坤 - 旅游管家</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        
+        body { 
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+        }
+        
+        /* 启动动画 - 简洁橙色圆球 */
+        .splash-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .circle {
+            width: 0;
+            height: 0;
+            background: linear-gradient(135deg, #ff7e5f, #feb47b);
+            border-radius: 50%;
+            animation: expandCircle 1.5s ease-out forwards;
+            box-shadow: 0 0 80px rgba(255,126,95,0.4);
+        }
+        
+        @keyframes expandCircle {
+            0% { 
+                width: 0; 
+                height: 0; 
+                opacity: 0;
+            }
+            70% { 
+                width: 60vh; 
+                height: 60vh; 
+                opacity: 1;
+                transform: scale(1.1);
+            }
+            100% { 
+                width: 50vh; 
+                height: 50vh; 
+                opacity: 1;
+            }
+        }
+        
+        .welcome-text {
+            color: #ffffff;
+            font-size: 3vh;
+            text-align: center;
+            margin-top: 50px;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: textAppear 1s ease-out 1.5s forwards;
+            text-shadow: 0 0 20px rgba(255,126,95,0.6);
+        }
+        
+        @keyframes textAppear {
+            from { 
+                opacity: 0; 
+                transform: translateY(20px); 
+            }
+            to { 
+                opacity: 1; 
+                transform: translateY(0); 
+            }
+        }
+        
+        /* 主界面样式 */
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+            opacity: 0;
+            animation: fadeIn 1s ease-out forwards;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #ff7e5f, #feb47b);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #a8d8ea;
+            font-size: 1rem;
+        }
+        
+        .chat-container {
+            flex: 1;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 20px;
+        }
+        
+        .chat-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .chat-container::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+        }
+        
+        .chat-container::-webkit-scrollbar-thumb {
+            background: rgba(168, 216, 234, 0.3);
+            border-radius: 10px;
+        }
+        
+        .message {
+            padding: 18px 24px;
+            border-radius: 20px;
+            max-width: 75%;
+            line-height: 1.6;
+            font-size: 15px;
+            position: relative;
+            animation: slideIn 0.3s ease-out;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        @keyframes slideIn {
+            from { 
+                opacity: 0; 
+                transform: translateY(10px); 
+            }
+            to { 
+                opacity: 1; 
+                transform: translateY(0); 
+            }
+        }
+        
+        .user-message {
+            background: linear-gradient(135deg, #ff7e5f, #feb47b);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 5px;
+            box-shadow: 0 4px 15px rgba(255, 126, 95, 0.2);
+        }
+        
+        .ai-message {
+            background: rgba(255, 255, 255, 0.1);
+            color: #e8f4f8;
+            align-self: flex-start;
+            border-bottom-left-radius: 5px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .input-area {
+            display: flex;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        #message-input {
+            flex: 1;
+            padding: 15px 20px;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #e8f4f8;
+            font-size: 15px;
+            resize: none;
+            min-height: 50px;
+            max-height: 200px;
+        }
+        
+        #message-input::placeholder {
+            color: rgba(168, 216, 234, 0.5);
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding-right: 5px;
+        }
+        
+        .btn {
+            padding: 12px 20px;
+            border-radius: 20px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #send-button {
+            background: linear-gradient(135deg, #ff7e5f, #feb47b);
+            color: white;
+        }
+        
+        #send-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 126, 95, 0.3);
+        }
+        
+        #send-button:disabled {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.5);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        #clear-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: #a8d8ea;
+        }
+        
+        #clear-button:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+        
+        #save-button {
+            background: rgba(168, 216, 234, 0.2);
+            color: #a8d8ea;
+        }
+        
+        #save-button:hover {
+            background: rgba(168, 216, 234, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .typing {
+            display: flex;
+            gap: 8px;
+            padding: 18px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            align-self: flex-start;
+            border-bottom-left-radius: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #a8d8ea;
+            animation: typing 1.4s infinite ease-in-out both;
+        }
+        
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.4); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        
+        /* ============ 移动端适配 ============ */
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+                padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            }
+
+            .header {
+                margin-bottom: 12px;
+            }
+
+            .header h1 {
+                font-size: 1.6rem;
+                margin-bottom: 4px;
+            }
+
+            .header p {
+                font-size: 0.85rem;
+            }
+
+            .chat-container {
+                padding: 12px;
+                gap: 12px;
+                margin-bottom: 12px;
+                border-radius: 12px;
+            }
+
+            .message {
+                max-width: 88%;
+                padding: 12px 16px;
+                font-size: 15px;
+            }
+
+            .input-area {
+                padding: 8px;
+                gap: 6px;
+            }
+
+            /* iOS 上输入框字号小于 16px 会触发自动放大 */
+            #message-input {
+                padding: 10px 12px;
+                font-size: 16px;
+                min-height: 44px;
+            }
+
+            .button-group {
+                gap: 6px;
+            }
+
+            .btn {
+                padding: 10px 12px;
+                font-size: 14px;
+                white-space: nowrap;
+            }
+        }
+
+        /* 超窄屏：按钮换行，避免挤压输入框 */
+        @media (max-width: 420px) {
+            .input-area {
+                flex-wrap: wrap;
+            }
+
+            #message-input {
+                flex-basis: 100%;
+            }
+
+            .button-group {
+                width: 100%;
+                justify-content: flex-end;
+                padding: 0 4px 2px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 启动动画 - 简洁橙色圆球 -->
+    <div class="splash-screen" id="splash-screen">
+        <div class="circle" id="circle"></div>
+        <div class="welcome-text">我是坤坤，您的旅游管家</div>
+    </div>
+    
+    <!-- 主聊天界面 -->
+    <div class="container" id="main-container" style="display: none;">
+        <div class="header">
+            <h1>坤坤 - 旅游管家</h1>
+            <p>智能对话 · 地图服务 · 旅行助手</p>
+        </div>
+        
+        <div class="chat-container" id="chat-container">
+            <div class="ai-message message" id="welcome-message"></div>
+        </div>
+        
+        <div class="input-area">
+            <textarea id="message-input" placeholder="请问需要什么帮助？..." rows="1"></textarea>
+            <div class="button-group">
+                <button id="clear-button" class="btn" onclick="clearHistory()">清空</button>
+                <button id="save-button" class="btn" onclick="saveChatHistory()">保存记录</button>
+                <button id="send-button" class="btn" onclick="sendMessage()">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM元素
+        const splashScreen = document.getElementById('splash-screen');
+        const mainContainer = document.getElementById('main-container');
+        
+        const chatContainer = document.getElementById('chat-container');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        let sessionId = localStorage.getItem('chatSessionId') || null;
+        
+        // 用于累积聊天记录和纯HTML代码
+        let chatHistory = [];
+        let htmlCodeHistory = [];
+
+        // 欢迎语：HTML 版本用于气泡，纯文本版本用于导出 .txt。
+        // 注意：这里是单行拼接，不能有换行和缩进——气泡用了 pre-wrap，源码空白会被原样渲染。
+        const WELCOME_HTML = '你好！我是坤坤，你的专属旅游管家！<br><br>我可以帮你：<br>' +
+            '• 查询景点信息和旅游攻略<br>' +
+            '• 地址转坐标：地址：北京市朝阳区天安门<br>' +
+            '• 坐标转地址：坐标：116.403874,39.914885<br>' +
+            '• 地点搜索：搜索：上海外滩附近酒店<br>' +
+            '• 路线规划：从：天安门到：故宫<br>' +
+            '• 实时天气：长沙今天天气怎么样';
+
+        const WELCOME_TEXT = WELCOME_HTML.replace(/<br>/g, '\n').replace(/<[^>]+>/g, '');
+
+        // 启动动画
+        window.addEventListener('load', () => {
+            // 填充欢迎气泡，并写入聊天历史
+            document.getElementById('welcome-message').innerHTML = WELCOME_HTML;
+            chatHistory.push('AI: ' + WELCOME_TEXT);
+            
+            // 3秒后进入主界面
+            setTimeout(() => {
+                splashScreen.style.opacity = '0';
+                splashScreen.style.transition = 'opacity 1s ease-out';
+                
+                setTimeout(() => {
+                    splashScreen.style.display = 'none';
+                    mainContainer.style.display = 'flex';
+                }, 1000);
+            }, 3000);
+        });
+
+        // 添加消息到界面（纯气泡样式）
+        function addMessage(text, isUser = false) {
+            // 提取纯HTML代码（从<!DOCTYPE html>开始到</html>结束）
+            const htmlCode = extractHtmlCode(text);
+            
+            // 如果提取到HTML代码，保存到专门的数组
+            if (htmlCode) {
+                htmlCodeHistory.push({
+                    code: htmlCode,
+                    timestamp: new Date().toLocaleString(),
+                    type: isUser ? '用户' : 'AI'
+                });
+            }
+            
+            // 显示消息（如果是HTML代码，只显示说明文字）
+            const displayText = htmlCode ? '已生成HTML文档，旅行规划表，请点击保存记录查看' : text;
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = isUser ? 'user-message message' : 'ai-message message';
+            messageDiv.textContent = displayText;
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            // 将消息添加到历史记录数组
+            const prefix = isUser ? '用户: ' : 'AI: ';
+            chatHistory.push(prefix + displayText);
+        }
+
+        // 提取HTML代码的函数
+        function extractHtmlCode(text) {
+            // 查找HTML代码的开始和结束位置
+            const startTag = '<!DOCTYPE html>';
+            const endTag = '</html>';
+            
+            const startIndex = text.indexOf(startTag);
+            const endIndex = text.lastIndexOf(endTag);
+            
+            // 如果找到完整的HTML代码，提取出来
+            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+                return text.substring(startIndex, endIndex + endTag.length);
+            }
+            
+            return null;
+        }
+
+        // 保存聊天记录和HTML代码到文件
+        function saveChatHistory() {
+            // 如果有HTML代码，优先保存最新的HTML代码
+            if (htmlCodeHistory.length > 0) {
+                const latestHtml = htmlCodeHistory[htmlCodeHistory.length - 1].code;
+                
+                // 创建Blob对象保存HTML文件
+                const blob = new Blob([latestHtml], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                
+                // 创建下载链接
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'a.html';
+                
+                // 模拟点击下载
+                document.body.appendChild(a);
+                a.click();
+                
+                // 清理资源
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                alert('HTML代码已保存到a.html文件！');
+            } else {
+                // 否则保存普通聊天记录
+                const content = chatHistory.join('\n\n');
+                
+                // 创建Blob对象
+                const blob = new Blob([content], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                
+                // 创建下载链接
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'a.txt';
+                
+                // 模拟点击下载
+                document.body.appendChild(a);
+                a.click();
+                
+                // 清理资源
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                alert('聊天记录已保存到a.txt文件！');
+            }
+        }
+
+        // 显示加载动画
+        function showLoading() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'typing';
+            typingDiv.innerHTML = `
+                <div class="dot"></div>
+                <div class="dot"></div>
+                <div class="dot"></div>
+            `;
+            typingDiv.id = 'loading';
+            chatContainer.appendChild(typingDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // 隐藏加载动画
+        function hideLoading() {
+            const loading = document.getElementById('loading');
+            if (loading) loading.remove();
+        }
+
+        // 转义 HTML，避免模型输出被当成标签执行
+        function escapeHtml(text) {
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // 极简 Markdown 渲染：粗体 + 列表符号，换行交给 CSS 的 pre-wrap
+        function renderMarkdown(text) {
+            let html = escapeHtml(text);
+            html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/^[ \t]*[-*•][ \t]+/gm, '• ');
+            return html;
+        }
+
+        // 发送消息（SSE 流式接收，逐字上屏）
+        async function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text) return;
+
+            addMessage(text, true);
+            messageInput.value = '';
+            sendButton.disabled = true;
+
+            // 占位气泡，收到第一个 delta 后开始替换
+            const bubble = document.createElement('div');
+            bubble.className = 'ai-message message';
+            bubble.textContent = '正在思考…';
+            chatContainer.appendChild(bubble);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            let acc = '';
+            let failed = false;
+
+            try {
+                const response = await fetch('/chat/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text, sessionId })
+                });
+
+                if (!response.ok || !response.body) {
+                    throw new Error('HTTP ' + response.status);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const chunks = buffer.split('\n\n');
+                    buffer = chunks.pop();
+
+                    for (const chunk of chunks) {
+                        const eventLine = chunk.match(/^event:\s*(.+)$/m);
+                        const dataLine = chunk.match(/^data:\s*(.+)$/m);
+                        if (!eventLine || !dataLine) continue;
+
+                        const event = eventLine[1].trim();
+                        let payload;
+                        try { payload = JSON.parse(dataLine[1]); } catch { continue; }
+
+                        if (event === 'session') {
+                            if (payload.sessionId && !sessionId) {
+                                sessionId = payload.sessionId;
+                                localStorage.setItem('chatSessionId', sessionId);
+                            }
+                        } else if (event === 'delta') {
+                            acc += payload.content || '';
+                            bubble.innerHTML = renderMarkdown(acc);
+                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                        } else if (event === 'error') {
+                            failed = true;
+                            bubble.textContent = '出错了：' + payload.message;
+                        }
+                    }
+                }
+            } catch (error) {
+                failed = true;
+                bubble.textContent = '请求失败: ' + error.message;
+            } finally {
+                sendButton.disabled = false;
+            }
+
+            if (!acc || failed) return;
+
+            // 若返回的是完整 HTML 规划表，转为提示并存入待保存队列
+            const htmlCode = extractHtmlCode(acc);
+            if (htmlCode) {
+                htmlCodeHistory.push({
+                    code: htmlCode,
+                    timestamp: new Date().toLocaleString(),
+                    type: 'AI'
+                });
+                bubble.textContent = '已生成旅行规划表（HTML），点击「保存记录」下载。';
+            }
+
+            chatHistory.push('AI: ' + (htmlCode ? '已生成旅行规划表（HTML）' : acc));
+        }
+
+        // 清空对话历史
+        function clearHistory() {
+            chatContainer.innerHTML = '<div class="ai-message message" id="welcome-message"></div>';
+            document.getElementById('welcome-message').innerHTML = WELCOME_HTML;
+
+            // 重置历史记录
+            chatHistory = [];
+            htmlCodeHistory = [];
+            chatHistory.push('AI: ' + WELCOME_TEXT);
+            
+            localStorage.removeItem('chatSessionId');
+            sessionId = null;
+            
+            fetch('/clear-history', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: sessionId })
+            });
+        }
+
+        // 自动调整输入框高度
+        messageInput.addEventListener('input', () => {
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 200) + 'px';
+        });
+
+        // 按Enter发送
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

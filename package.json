@@ -1,0 +1,30 @@
+{
+  "name": "travel-assistant",
+  "version": "2.0.0",
+  "description": "对话式旅行规划助手：基于 Function Calling 的 Agent + 高德地图工具集 + SSE 流式输出",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test/smoke.js"
+  },
+  "keywords": [
+    "agent",
+    "function-calling",
+    "llm",
+    "amap",
+    "sse"
+  ],
+  "author": "肖正坤",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0"
+  }
+}

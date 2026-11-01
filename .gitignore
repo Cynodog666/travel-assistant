@@ -1,0 +1,26 @@
+# 依赖
+node_modules/
+
+# 环境变量（含密钥，绝对不能提交）
+.env
+.env.local
+.env.*.local
+
+# 日志与运行时产物
+*.log
+npm-debug.log*
+chat_history.json
+tmp/
+.DS_Store
+Thumbs.db
+
+# 本地备份（含旧版硬编码密钥，绝对不能提交）
+_backup_v1/
+
+# 编辑器
+.vscode/
+.idea/
+
+# 构建产物
+dist/
+build/
