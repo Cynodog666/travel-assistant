@@ -24,8 +24,31 @@ const axios = require('axios');
 
 const DEFAULT_BASE_URL = 'https://open.feishu.cn';
 
-// 回插前必须从 convert 结果里剔除的字段：只读或由服务端生成
-const STRIP_FIELDS = ['revision_id', 'parent_id', 'merge_info', 'comment_ids', 'comments'];
+// 回插前必须从 convert 结果里剔除的字段：只读或由服务端生成。
+// 注意 merge_info 可能出现在 block 顶层，也可能藏在 table.property 里，所以要递归删。
+const STRIP_FIELDS = ['revision_id', 'parent_id', 'merge_info', 'comment_ids', 'comments', 'cells'];
+
+/** 递归剔掉只读字段；children 里的临时 id 要保留（那是父子关系）。 */
+function stripReadOnly(value) {
+  if (Array.isArray(value)) return value.map(stripReadOnly);
+  if (!value || typeof value !== 'object') return value;
+
+  const clean = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (STRIP_FIELDS.includes(key)) continue;
+    clean[key] = stripReadOnly(item);
+  }
+  return clean;
+}
+
+/** 把 convert 返回的 blocks 清成可以回插的形态。 */
+function sanitizeBlocks(blocks) {
+  return (blocks || []).map((block) => {
+    const clean = stripReadOnly(block);
+    if (!Array.isArray(clean.children)) clean.children = [];
+    return clean;
+  });
+}
 
 const MAX_BLOCKS_PER_REQUEST = 1000;
 const MAX_FIRST_LEVEL_PER_CHUNK = 50;
@@ -50,19 +73,6 @@ function explainFeishuError(code, msg) {
     return `应用凭证无效（${msg}）：检查 FEISHU_APP_ID / FEISHU_APP_SECRET`;
   }
   return `飞书接口失败（code=${code}）：${msg || '未知错误'}`;
-}
-
-/** 把 convert 返回的 blocks 清成可以回插的形态。 */
-function sanitizeBlocks(blocks) {
-  return (blocks || []).map((block) => {
-    const clean = {};
-    for (const [key, value] of Object.entries(block)) {
-      if (STRIP_FIELDS.includes(key)) continue;
-      clean[key] = value;
-    }
-    if (!Array.isArray(clean.children)) clean.children = [];
-    return clean;
-  });
 }
 
 /** 取出 roots 及其子孙 block（保持原有顺序），用于分批插入。 */
@@ -112,7 +122,7 @@ class FeishuClient {
     this.tokenExpiresAt = 0;
   }
 
-  async request(method, path, { body, query, auth = true } = {}) {
+  async request(method, path, { body, query, auth = true, raw = false } = {}) {
     const headers = { 'Content-Type': 'application/json; charset=utf-8' };
     if (auth) headers.Authorization = `Bearer ${await this.tenantToken()}`;
 
@@ -152,7 +162,8 @@ class FeishuClient {
       const hint = explainFeishuError(payload.code, payload.msg);
       throw new Error(logId ? `${hint}｜log_id=${logId}` : hint);
     }
-    return payload.data || {};
+    // 取 token 这类接口把结果放在响应根部（不在 data 里），需要原始 payload
+    return raw ? payload : (payload.data || {});
   }
 
   /** tenant_access_token 有 2 小时有效期，这里提前 60 秒过期，避免边界失败。 */
@@ -160,8 +171,10 @@ class FeishuClient {
     const now = Date.now();
     if (this.token && now < this.tokenExpiresAt) return this.token;
 
+    // 注意：这个接口的 tenant_access_token / expire 在响应根部，不在 data 里
     const data = await this.request('POST', '/open-apis/auth/v3/tenant_access_token/internal', {
       auth: false,
+      raw: true,
       body: { app_id: this.appId, app_secret: this.appSecret },
     });
 
@@ -263,6 +276,22 @@ class FeishuClient {
   }
 
   /**
+   * 直接问飞书要文档真实链接，比拿 FEISHU_WEB_ORIGIN 拼字符串靠谱得多
+   * （租户域名每个人都不一样，填错就是一条 404 链接）。
+   * 需要权限：drive:drive.metadata:readonly 或 drive:drive。
+   */
+  async fetchDocumentUrl(documentId) {
+    const data = await this.request('POST', '/open-apis/drive/v1/metas/batch_query', {
+      body: {
+        request_docs: [{ doc_token: documentId, doc_type: 'docx' }],
+        with_url: true,
+      },
+    });
+    const meta = data.metas && data.metas[0];
+    return (meta && meta.url) || '';
+  }
+
+  /**
    * 一条龙：建文档 → Markdown 转 blocks → 插入 → 可选授权。
    * 返回 { documentId, url, blocks, shared }。
    */
@@ -294,13 +323,24 @@ class FeishuClient {
       }
     }
 
+    // 先问飞书要真实链接，拿不到再用 FEISHU_WEB_ORIGIN 拼（可能拼错，所以放后面）
+    let url = '';
+    let urlError = '';
+    try {
+      url = await this.fetchDocumentUrl(documentId);
+    } catch (error) {
+      urlError = error.message;
+    }
+    if (!url) url = this.documentUrl(documentId);
+
     return {
       documentId,
-      url: this.documentUrl(documentId),
+      url,
       blocks: inserted,
       shared,
       linkShared,
       shareError: shareErrors.join('；'),
+      urlError,
     };
   }
 }

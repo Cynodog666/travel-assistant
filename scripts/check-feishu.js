@@ -33,9 +33,11 @@ const fail = (label, detail = '') => console.log(`  FAIL  ${label}${detail ? `  
   pass('飞书配置已加载', `appId=${config.feishuAppId.slice(0, 8)}***`);
 
   if (!config.feishuWebOrigin) {
-    fail('FEISHU_WEB_ORIGIN', '没填，导出后拿不到可点链接');
-  } else if (/yourname|xxx|example/i.test(config.feishuWebOrigin)) {
-    fail('FEISHU_WEB_ORIGIN', `看起来还是示例值：${config.feishuWebOrigin}（应该是你自己的租户域名）`);
+    console.log('  WARN  FEISHU_WEB_ORIGIN 没填（现在会优先用飞书返回的真实链接，这个仅作兜底）');
+  } else if (/yourname|xxx|example|placeholder/i.test(config.feishuWebOrigin)) {
+    console.log(`  WARN  FEISHU_WEB_ORIGIN 看起来是示例值：${config.feishuWebOrigin}（仅作兜底，不影响真实链接）`);
+  } else if (/^https?:\/\/(open|www|api)\.feishu\.cn\/?$/.test(config.feishuWebOrigin)) {
+    console.log(`  WARN  FEISHU_WEB_ORIGIN=${config.feishuWebOrigin} 是开放平台地址，不是租户域名（仅作兜底）`);
   } else {
     pass('FEISHU_WEB_ORIGIN', config.feishuWebOrigin);
   }
@@ -99,7 +101,7 @@ const fail = (label, detail = '') => console.log(`  FAIL  ${label}${detail ? `  
     process.exit(1);
   }
 
-  // 5) 分享
+  // 5) 分享 + 真实链接
   if (client.linkShare) {
     try {
       await client.setLinkShare(documentId, client.linkShare);
@@ -118,10 +120,20 @@ const fail = (label, detail = '') => console.log(`  FAIL  ${label}${detail ? `  
     }
   }
 
-  const url = client.documentUrl(documentId);
+  let url = '';
+  try {
+    url = await client.fetchDocumentUrl(documentId);
+    pass('获取文档真实链接', url);
+  } catch (error) {
+    fail('获取文档真实链接', error.message);
+    console.log('    需要权限：drive:drive.metadata:readonly（只读元数据，最小权限）。');
+    console.log('    开发者后台「权限管理」搜索该 scope 勾选 → 重新发布版本 → 再跑一次。');
+  }
+
+  if (!url) url = client.documentUrl(documentId);
   console.log('');
-  console.log(url ? `文档链接：${url}` : `文档已创建，但没配 FEISHU_WEB_ORIGIN，只能给 document_id：${documentId}`);
-  console.log('打开看看，能正常显示就说明整条链路通了。这篇测试文档可以直接删。\n');
+  console.log(url ? `文档链接：${url}` : `文档已创建，但拿不到链接，document_id：${documentId}`);
+  console.log('打开看看，能正常显示就说明整条链路通了。这次自检建的测试文档可以直接删。\n');
 })().catch((error) => {
   console.error('自检异常：', error);
   process.exit(1);

@@ -191,24 +191,28 @@ map_image 工具 ──► 服务端用 HMAC 签一个 /api/staticmap?location=.
 
 1. 打开 [飞书开发者后台](https://open.feishu.cn/app)，**创建企业自建应用**，名字随便（比如 `旅行助手`）
 2. 左侧「凭证与基础信息」，记下 **App ID** 和 **App Secret**
-3. 左侧「权限管理」，搜索并开通这三个（后台显示的是中文名）：
+3. 左侧「权限管理」，搜索并开通这四个（后台显示的是中文名）：
    - **创建及编辑新版文档**（`docx:document`）
    - **文本内容转换为云文档块**（Markdown 转 block 用的）
-   - **云文档权限**（把文档授权给你自己用的；找不到就先跳过，见下面「打不开文档」）
+   - **云文档权限**（把文档授权/设链接分享用的）
+   - **查看云空间元数据**（`drive:drive.metadata:readonly`，取文档真实链接用的；找不到就先跳过，
+     链接会退回用 `FEISHU_WEB_ORIGIN` 拼，拼错就是死链）
 4. 左侧「版本管理与发布」→ **创建版本** → 提交发布。企业版需要管理员审核，个人版一般直接通过
 5. 在浏览器打开飞书，地址栏形如 `https://yourname.feishu.cn` —— 这串就是 `FEISHU_WEB_ORIGIN`
-6. 把值填进 `.env`。**你不需要知道自己的邮箱**，用链接分享最省事：
+6. 把值填进 `.env`。**你不需要知道自己的邮箱，也不需要填租户域名**：
 
 ```bash
 FEISHU_APP_ID=cli_xxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx
-FEISHU_WEB_ORIGIN=https://yourname.feishu.cn
 # 互联网上拿到链接就能看（适合"把链接发给别人"）
 FEISHU_LINK_SHARE=anyone_readable
 ```
 
 如果只想让公司内部的人看，改成 `tenant_readable`。想精确指定某个人，就用
 `FEISHU_SHARE_TO=你的邮箱`（或 `openid`），不设 `FEISHU_LINK_SHARE` 也行。
+
+`FEISHU_WEB_ORIGIN` 现在是**可选的兜底值**：开通了「查看云空间元数据」之后，文档链接是直接问
+飞书要的，不需要你拼域名。（早期版本靠拼域名，结果填成 `https://open.feishu.cn` 就是一条死链。）
 
 7. 重启服务，`/api/health` 里应该出现 `"feishu": true` 和 `export_to_feishu` 工具
 
@@ -249,7 +253,8 @@ npm run check:feishu
 - 表格 block 里的 `merge_info` 是只读字段，回插前必须删掉，否则报 `1770006 schema mismatch`。
 - 单次最多插 1000 个 block，代码按「每次 50 个一级块」分批，超了自动拆请求。
 - `tenant_access_token` 有效期 2 小时，缓存起来复用，提前 60 秒过期。
-- 文档链接 = `FEISHU_WEB_ORIGIN` + `/docx/` + `document_id`；不配 origin 就只能返回 id。
+- 文档链接 = 调 `drive/v1/metas/batch_query`（`with_url: true`）直接拿飞书返回的真实 URL；
+  拿不到才退回 `FEISHU_WEB_ORIGIN` 拼字符串。**不要靠拼域名**——租户域名每人不同，填错就是死链。
 
 ---
 
@@ -435,7 +440,7 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `STATICMAP_SECRET` | 否 | 复用 `ACCESS_TOKEN` / `AMAP_KEY` | 静态图链接的签名密钥，想单独轮换时设置 |
 | `FEISHU_APP_ID` | 否 | — | 飞书自建应用 App ID；不填就不注册飞书导出工具 |
 | `FEISHU_APP_SECRET` | 配飞书时必填 | — | 飞书自建应用 App Secret（与 App ID 必须成对） |
-| `FEISHU_WEB_ORIGIN` | 配飞书时建议填 | — | 租户域名，如 `https://yourname.feishu.cn`，用来拼文档链接 |
+| `FEISHU_WEB_ORIGIN` | 否 | — | 仅兜底：拿不到真实链接时才用它拼；开通元数据权限后不需要填 |
 | `FEISHU_LINK_SHARE` | 否 | — | `anyone_readable`（互联网可读）/ `tenant_readable`（组织内可读）/ 留空不设置 |
 | `FEISHU_SHARE_TO` | 二选一 | — | 文档授权给谁（邮箱或 `openid`），比链接分享多一步但权限更明确 |
 | `FEISHU_SHARE_MEMBER_TYPE` | 否 | `email` | 授权成员类型：`email` / `openid` / `unionid` |
@@ -570,6 +575,12 @@ npm test
     不需要带 Authorization 头。
 12. **签名里别把 `exp` 又拼一遍**：`sig = HMAC(排序参数 + exp)`，如果 `exp` 同时还留在排序参数里，
     校验时就会变成 `exp` 出现两次，自己签的自己验不过——这次就是这么写出 bug 的，测试立刻抓到了。
+13. **`tenant_access_token` 在响应根部**，不在 `data` 里。套通用解包逻辑会得到 undefined，
+    表现成"飞书没有返回 tenant_access_token"，其实令牌就在旁边。
+14. **`merge_info` 会藏在 `table.property` 里**，不是只在 block 顶层。只删顶层，表格一插就
+    `1770001 invalid param`；必须递归清洗（顺带删掉只读的 `table.cells`）。
+15. **应用不能跨企业迁移**：个人账号下建的应用，在新企业里不会自动生效，必须在新企业下重建，
+    否则一直 21001。
 
 ---
 
