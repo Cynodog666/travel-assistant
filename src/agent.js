@@ -184,7 +184,7 @@ class Agent {
    * Agent 主循环：模型决定调工具 -> 执行 -> 把结果回填 -> 再来一轮，直到产出最终回答。
    * 返回完整回答文本。
    */
-  async run(messages, { signal, onDelta } = {}) {
+  async run(messages, { signal, onDelta, onToolResult } = {}) {
     const config = this.config;
 
     for (let step = 0; step < config.maxToolSteps; step += 1) {
@@ -227,6 +227,16 @@ class Agent {
             if (error instanceof AgentAbortError) throw error;
             if (signal && signal.aborted) throw new AgentAbortError();
             toolResult = { error: error.message };
+          }
+
+          // 工具结果通常是结构化数据，交给上层决定要不要渲染成卡片。
+          // 这里只上报，不参与对话内容，出错也不影响主流程。
+          if (onToolResult && toolResult && !toolResult.error) {
+            try {
+              onToolResult(call.function.name, toolResult);
+            } catch {
+              /* 卡片渲染失败不能影响对话 */
+            }
           }
 
           return {

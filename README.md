@@ -27,6 +27,7 @@
 | 一键导航 | 路线规划结果自带高德深链（`amapuri://`）和 H5 链接，点一下直接开始导航 |
 | 地图配图 | `map_image` 工具生成静态地图，回答里直接出图（高德 key 不出服务端） |
 | 导出飞书 | `export_to_feishu` 工具把行程单写成飞书云文档，直接给可分享链接（可选） |
+| 结构化卡片 | 车次/航班/车站直接渲染成卡片，票价余票不经模型转述，避免它漏字段、写错余票 |
 | 多轮对话 | 基于 sessionId 隔离会话，自动裁剪上下文控制 token，闲置超时自动回收 |
 | 流式输出 | SSE 逐 token 推送，前端打字机效果 |
 | 接口缓存 | 高德请求走 LRU 缓存，重复查询不打外部接口 |
@@ -97,6 +98,8 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 │   ├── static-map.js    静态地图：签名 URL + 服务端代理取图
 │   ├── feishu.js        飞书云文档导出：建文档 → Markdown 转 block → 批量插入
 │   ├── mcp-client.js    MCP 客户端（Streamable HTTP）：握手 / 列工具 / 调工具
+│   ├── ui-cards.js      工具结果 → 前端卡片（车次/航班/车站）
+│   ├── py-literal.js    Python 字面量解析（MCP 返回的是 repr 字符串，不是 JSON）
 │   ├── tool-registry.js 工具注册表：schema 与 handler 的映射
 │   ├── session.js       会话存储：裁剪、TTL、容量淘汰
 │   ├── security.js      令牌校验 + 限流
@@ -318,6 +321,48 @@ TRIPMATCH_TOOL_ALLOW=flight,train,transfer
 
 ---
 
+## 工具结果渲染成卡片
+
+一开始是让模型把车次/航班自己排版成 Markdown 表格。实测问题很明显：它会漏字段、把"已售罄"
+写成有票、把 5h54m 算成 6 小时，而且同一个问题问两次排版还不一样。
+
+所以改成**结构化数据不经过模型**：
+
+```
+MCP tools/call ──► Agent.onToolResult ──► buildUiCard() ──► SSE event: card ──► 前端渲染
+                                                                              │
+                                        模型只拿文字结论 ◄────────────────────┘
+```
+
+### 三个关键决定
+
+**1. 卡片在正文之前下发。** 工具一返回就推 `card` 事件，前端把它插进对话流并把当前气泡"断开"
+（下一个 `delta` 另起一个气泡），于是顺序自然是「卡片 → 模型的结论」，不会出现结论在上、卡片在下。
+
+**2. 模型只给结论，不复述明细。** 系统提示词里写明：车次/航班列表由界面渲染成卡片，
+你只给取舍建议和提醒。实测回复从 1500+ 字降到 560 字，且不再出现 Markdown 表格。
+
+**3. 只有"列表型"结果才生成卡片。** 坐标、天气对象这类返回 `null`，交给模型用文字表达——
+硬套一个卡片模板反而更难看。
+
+### 一个必须踩的坑：返回值不是 JSON
+
+飞常准 MCP 的 `tools/call` 返回的是 **Python `repr()` 字符串**：
+
+```
+Train tickets: {'code': 200, 'data': [{'trainNumber': 'G52', 'seatLists': [{'seatPrice': 473.5}]}]}
+```
+
+直接 `JSON.parse` 会炸，用正则把单引号替换成双引号又会把文本里的撇号改坏。
+所以写了 [`src/py-literal.js`](src/py-literal.js)：一个确定性的递归下降解析器，支持
+单/双引号、嵌套 dict/list、`True`/`False`/`None`、`\uXXXX` 转义，40 行代码 + 单测。
+
+`src/ui-cards.js` 的顺序是：去前缀 → JSON 试一次 → 失败再走 Python 字面量 → 按字段特征
+（`trainNumber` / `FlightNo` / `station_name`）识别是哪类列表 → 生成卡片对象。
+服务端用 `error_code: 10` 表达"查到了但没有数据"，这种不生成空卡片。
+
+---
+
 ## 技术栈
 
 - **后端**：Node.js 18+ / Express 5
@@ -534,8 +579,9 @@ curl -i -X POST https://your-domain.com/api/chat \
 
 ### SSE 事件
 
-```
+```js
 event: session   data: {"sessionId":"abc123"}
+event: card      data: {"type":"train-list","title":"火车票","rows":[...]}   ← 结构化卡片
 event: delta     data: {"content":"岳"}          ← 逐 token，前端拼接
 event: done      data: {"sessionId":"abc123","content":"完整回答"}
 event: error     data: {"message":"错误原因"}
@@ -610,7 +656,7 @@ npm test
   PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：78 通过 / 0 失败
+结果：87 通过 / 0 失败
 ```
 
 ---
@@ -659,6 +705,7 @@ npm test
 - [x] 静态地图配图（签名 URL + 服务端代理，key 不出服务端）
 - [x] 飞书云文档导出（建文档 → Markdown 转 block → 批量插入 → 授权链接）
 - [x] MCP 客户端（飞常准 Tripmatch：航班票价 / 铁路余票 / 空铁联运）
+- [x] 车次/航班结果渲染成结构化卡片，模型不再复述明细
 - [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
 - [ ] 工具结果加上结构化展示（地图卡片、路线图）
 - [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）

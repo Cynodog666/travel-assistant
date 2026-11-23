@@ -475,6 +475,86 @@
             margin: 8px 0;
             border-radius: 12px;
         }
+
+        /* 结构化卡片：车次 / 航班 / 车站，由服务端直接给数据，不经过模型复述 */
+        .chat-card {
+            align-self: stretch;
+            margin: 8px 0;
+            padding: 12px 14px;
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            font-size: 13px;
+        }
+
+        .chat-card-head {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #f2f4f8;
+        }
+
+        .chat-card-sub {
+            font-size: 12px;
+            font-weight: 400;
+            color: #98a2b8;
+        }
+
+        .chat-card-body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-card-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 4px 10px;
+            padding: 7px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .chat-card-row:first-child {
+            border-top: 0;
+        }
+
+        .chat-card-cell {
+            color: #d8dded;
+        }
+
+        .chat-card-strong {
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .chat-card-muted {
+            font-size: 12px;
+            color: #8d97ad;
+        }
+
+        .chat-card-arrow {
+            color: #6f7891;
+        }
+
+        .chat-card-price {
+            margin-left: auto;
+            font-weight: 600;
+            color: #ffb27a;
+        }
+
+        .chat-card-soldout {
+            margin-left: auto;
+            font-weight: 600;
+            color: #ff7b7b;
+        }
+
+        .chat-card-footer {
+            margin-top: 8px;
+            font-size: 11px;
+            color: #6f7891;
+        }
     </style>
 </head>
 <body>

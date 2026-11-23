@@ -193,6 +193,103 @@
     return div;
   }
 
+  // ---------------------------------------------------------------------
+  // 结构化卡片：车次 / 航班 / 车站列表由服务端直接给数据，前端原样渲染，
+  // 不经过模型复述——避免它漏字段、把售罄写成有票、或算错时长。
+  // ---------------------------------------------------------------------
+  function makeRow(parts) {
+    const row = document.createElement('div');
+    row.className = 'chat-card-row';
+    for (const part of parts) {
+      if (!part || !part.text) continue;
+      const span = document.createElement('span');
+      span.className = 'chat-card-cell' + (part.cls ? ' ' + part.cls : '');
+      span.textContent = part.text;
+      row.appendChild(span);
+    }
+    return row;
+  }
+
+  function renderCard(card) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chat-card chat-card--' + (card.type || 'unknown');
+
+    const head = document.createElement('div');
+    head.className = 'chat-card-head';
+    head.textContent = card.title || '数据';
+    if (card.subtitle) {
+      const sub = document.createElement('span');
+      sub.className = 'chat-card-sub';
+      sub.textContent = card.subtitle;
+      head.appendChild(sub);
+    }
+    wrapper.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'chat-card-body';
+
+    if (card.type === 'train-list') {
+      for (const row of card.rows) {
+        const seat = row.seat;
+        body.appendChild(
+          makeRow([
+            { text: row.trainNumber, cls: 'chat-card-strong' },
+            { text: `${row.fromStation} ${row.fromTime}` },
+            { text: '→', cls: 'chat-card-arrow' },
+            { text: `${row.toStation} ${row.toTime}` },
+            { text: row.duration, cls: 'chat-card-muted' },
+            {
+              text: seat
+                ? seat.soldOut
+                  ? `${seat.name} 已售罄`
+                  : `${seat.name} ¥${seat.price}${seat.left !== null ? ` / ${seat.left}张` : ''}`
+                : '',
+              cls: seat && seat.soldOut ? 'chat-card-soldout' : 'chat-card-price',
+            },
+          ])
+        );
+      }
+    } else if (card.type === 'flight-list') {
+      for (const row of card.rows) {
+        body.appendChild(
+          makeRow([
+            { text: row.flightNo, cls: 'chat-card-strong' },
+            { text: `${row.depTime}→${row.arrTime}` },
+            { text: `${row.fromAirport}${row.terminal ? ' ' + row.terminal : ''}` },
+            { text: row.duration, cls: 'chat-card-muted' },
+            { text: row.ontimeRate ? `准点 ${row.ontimeRate}` : '', cls: 'chat-card-muted' },
+            { text: row.price ? `¥${row.price}` : '', cls: 'chat-card-price' },
+          ])
+        );
+      }
+    } else if (card.type === 'station-list') {
+      for (const row of card.rows) {
+        body.appendChild(
+          makeRow([
+            { text: row.name, cls: 'chat-card-strong' },
+            { text: row.city || '', cls: 'chat-card-muted' },
+            { text: row.code || '', cls: 'chat-card-muted' },
+          ])
+        );
+      }
+    } else {
+      body.textContent = JSON.stringify(card.rows).slice(0, 400);
+    }
+
+    wrapper.appendChild(body);
+
+    if (card.footer) {
+      const footer = document.createElement('div');
+      footer.className = 'chat-card-footer';
+      footer.textContent = card.footer;
+      wrapper.appendChild(footer);
+    }
+
+    els.chatContainer.appendChild(wrapper);
+    els.chatContainer.scrollTop = els.chatContainer.scrollHeight;
+    return wrapper;
+  }
+
   function resetWelcome() {
     els.chatContainer.innerHTML = '<div class="ai-message message" id="welcome-message"></div>';
     els.welcomeMessage = document.getElementById('welcome-message');
@@ -221,8 +318,12 @@
     els.messageInput.style.height = 'auto';
     setBusy(true);
 
-    // 占位气泡，收到第一个 delta 开始替换
-    const bubble = appendBubble('正在思考…', false);
+    // 占位气泡，收到第一个 delta 开始替换；遇到卡片事件就另起一个气泡
+    let bubble = appendBubble('正在思考…', false);
+    const ensureBubble = () => {
+      if (!bubble) bubble = appendBubble('', false);
+      return bubble;
+    };
     let acc = '';
     let failed = false;
 
@@ -269,30 +370,34 @@
             }
           } else if (event === 'delta') {
             acc += payload.content || '';
-            bubble.innerHTML = renderMarkdown(acc);
+            ensureBubble().innerHTML = renderMarkdown(acc);
             els.chatContainer.scrollTop = els.chatContainer.scrollHeight;
+          } else if (event === 'card') {
+            renderCard(payload);
+            // 卡片之后如果还有正文，让它另起一个气泡，别塞到卡片上面去
+            bubble = null;
           } else if (event === 'done') {
             // 以 done 的完整内容为准：万一某些分片丢了，这里还能补回来
             if (!acc && payload.content) {
               acc = payload.content;
-              bubble.innerHTML = renderMarkdown(acc);
+              ensureBubble().innerHTML = renderMarkdown(acc);
             }
           } else if (event === 'error') {
             failed = true;
-            bubble.textContent = '出错了：' + (payload.message || '未知错误');
+            ensureBubble().textContent = '出错了：' + (payload.message || '未知错误');
           }
         }
       }
     } catch (error) {
       failed = true;
-      bubble.textContent = '请求失败: ' + error.message;
+      ensureBubble().textContent = '请求失败: ' + error.message;
     } finally {
       setBusy(false);
     }
 
     if (failed) return;
     if (!acc) {
-      bubble.textContent = '（没有收到内容，稍后再试一次）';
+      ensureBubble().textContent = '（没有收到内容，稍后再试一次）';
       return;
     }
 
@@ -304,7 +409,7 @@
         timestamp: new Date().toLocaleString(),
         type: 'AI',
       });
-      bubble.textContent = '已生成旅行规划表（HTML），点击「保存记录」下载。';
+      ensureBubble().textContent = '已生成旅行规划表（HTML），点击「保存记录」下载。';
       chatHistory.push('AI: 已生成旅行规划表（HTML）');
     } else {
       chatHistory.push('AI: ' + acc);

@@ -42,6 +42,7 @@ function check(name, ok, detail = '') {
 // ---------------------------------------------------------------------------
 
 let secondRoundBody = null;
+let trainRoundBody = null;
 
 const mockModel = http.createServer((req, res) => {
   if (!req.url.endsWith('/chat/completions')) {
@@ -65,12 +66,22 @@ const mockModel = http.createServer((req, res) => {
       res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
 
     if (!hasToolResult) {
-      // 第一轮：故意把 name 和 arguments 都拆成多个分片，模拟真实模型的增量返回
+      // 第一轮：按用户问的内容选工具——问火车走 MCP（顺带验证卡片），其余走天气
+      const lastUser = [...(body.messages || [])].reverse().find((m) => m.role === 'user');
+      const userText = (lastUser && lastUser.content) || '';
+      const wantsTrain = userText.includes('火车');
+
+      const toolName = wantsTrain ? 'tripmatch__train_search' : 'weather';
+      const toolArgs = wantsTrain
+        ? '{"from_city":"合肥","to_city":"北京","date":"2026-12-04"}'
+        : '{"city":"长沙"}';
+
+      // 故意把 name 和 arguments 都拆成多个分片，模拟真实模型的增量返回
       const fragments = [
-        { index: 0, id: 'call_abc', type: 'function', function: { name: 'wea', arguments: '' } },
-        { index: 0, function: { name: 'ther', arguments: '{"city"' } },
-        { index: 0, function: { arguments: ':"长' } },
-        { index: 0, function: { arguments: '沙"}' } },
+        { index: 0, id: 'call_abc', type: 'function', function: { name: toolName.slice(0, 5), arguments: '' } },
+        { index: 0, function: { name: toolName.slice(5), arguments: toolArgs.slice(0, 6) } },
+        { index: 0, function: { arguments: toolArgs.slice(6, 13) } },
+        { index: 0, function: { arguments: toolArgs.slice(13) } },
       ];
       for (const fragment of fragments) {
         send({ tool_calls: [fragment] });
@@ -83,8 +94,17 @@ const mockModel = http.createServer((req, res) => {
     }
 
     // 第二轮：模型拿到工具结果后输出正文
-    secondRoundBody = body;
-    const answer = '长沙今天多云，最高 25℃，暂无需要特别注意的预警。';
+    const lastUserText = (() => {
+      const lastUser = [...(body.messages || [])].reverse().find((m) => m.role === 'user');
+      return (lastUser && lastUser.content) || '';
+    })();
+    const wantsTrain = lastUserText.includes('火车');
+    if (wantsTrain) trainRoundBody = body;
+    else secondRoundBody = body;
+
+    const answer = wantsTrain
+      ? '合肥到北京的高铁我列在卡片里了，建议选上午的车次。'
+      : '长沙今天多云，最高 25℃，暂无需要特别注意的预警。';
     for (const char of answer) {
       send({ content: char });
       await sleep(5);
@@ -264,6 +284,7 @@ async function readSse(response) {
   const decoder = new TextDecoder();
   let buffer = '';
   const events = [];
+  const cards = [];
   let text = '';
   let doneContent = '';
 
@@ -283,10 +304,11 @@ async function readSse(response) {
       events.push(event);
       if (event === 'delta') text += payload.content || '';
       if (event === 'done') doneContent = payload.content || '';
+      if (event === 'card') cards.push(payload);
     }
   }
 
-  return { events, text, doneContent };
+  return { events, text, doneContent, cards };
 }
 
 /** 一个最小的 http 替身：记录调用，按 URL 返回假数据。 */
@@ -352,7 +374,16 @@ function createFakeMcpServer() {
         return;
       }
       if (message.method === 'tools/call') {
-        const text = JSON.stringify({ ok: true, tool: message.params && message.params.name, args: message.params && message.params.arguments });
+        const calledName = message.params && message.params.name;
+        // 火车票按真实返回格式给（Python 字面量 + 前缀），用来验证卡片渲染
+        const text =
+          calledName === 'train_search'
+            ? "Train tickets: {'code': 200, 'message': 'Success', 'data': {'code': 0, 'msg': 'ok', 'data': [" +
+              "{'trainNumber': 'G52', 'fromStation': '合肥南', 'toStation': '北京南', 'fromTime': '07:18', 'toTime': '10:55', 'useTime': 217, " +
+              "'seatLists': [{'seatName': '二等座', 'seatPrice': 473.5, 'ticketLeft': 0}]}, " +
+              "{'trainNumber': 'G2554', 'fromStation': '合肥', 'toStation': '北京南', 'fromTime': '09:00', 'toTime': '13:53', 'useTime': 293, " +
+              "'seatLists': [{'seatName': '二等座', 'seatPrice': 468.0, 'ticketLeft': 99}]}]}}"
+            : JSON.stringify({ ok: true, tool: calledName, args: message.params && message.params.arguments });
         send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text }] } }, true);
         return;
       }
@@ -873,6 +904,66 @@ function runUnitTests() {
     check('MCP：JSON-RPC error 转成可读错误抛出', /invalid params/.test(mcpErrorMessage), mcpErrorMessage.slice(0, 48));
 
     mcpFake.server.close();
+
+    // --- 工具结果 → 卡片 ---
+    const { parsePythonLiteral } = require('../src/py-literal');
+    const { buildUiCard } = require('../src/ui-cards');
+
+    check(
+      'Python 字面量：单引号、嵌套、None/True/False 都能解析',
+      (() => {
+        const parsed = parsePythonLiteral("{'a': [1, 2.5, None, True, False], 'b': 'x'}");
+        return parsed.a.length === 5 && parsed.a[2] === null && parsed.a[3] === true && parsed.b === 'x';
+      })()
+    );
+
+    // 真实返回样式：前缀 + Python repr + data.data 双层嵌套
+    const trainPayload =
+      "Train tickets: {'code': 200, 'message': 'Success', 'data': {'code': 0, 'msg': 'ok', 'data': [" +
+      "{'trainNumber': 'G52', 'fromStation': '合肥南', 'toStation': '北京南', 'fromTime': '07:18', 'toTime': '10:55', 'useTime': 217, " +
+      "'seatLists': [{'seatName': '二等座', 'seatPrice': 473.5, 'ticketLeft': 0}]}, " +
+      "{'trainNumber': 'G2554', 'fromStation': '合肥', 'toStation': '北京南', 'fromTime': '09:00', 'toTime': '13:53', 'useTime': 293, " +
+      "'seatLists': [{'seatName': '二等座', 'seatPrice': 468.0, 'ticketLeft': 99}]}]}}";
+
+    const trainCard = buildUiCard('tripmatch__searchTrainTickets', trainPayload);
+    check(
+      '卡片：车次列表解析出车次/时刻/时长/票价/余票',
+      Boolean(
+        trainCard &&
+          trainCard.type === 'train-list' &&
+          trainCard.rows.length === 2 &&
+          trainCard.rows[0].duration === '3h37m' &&
+          trainCard.rows[0].seat.soldOut === true &&
+          trainCard.rows[1].seat.price === 468
+      ),
+      trainCard ? JSON.stringify(trainCard.rows[0]) : '没生成卡片'
+    );
+
+    const flightPayload =
+      "Flight search results: {'code': 200, 'data': [{'FlightNo': 'CA1844', 'FlightCompany': '中国国际航空股份有限公司', " +
+      "'FlightDeptimePlanDate': '2026-12-04 16:15:00', 'FlightArrtimePlanDate': '2026-12-04 18:15:00', 'FlightDuration': '92', " +
+      "'FlightDep': '合肥', 'FlightArr': '北京', 'FlightDepAirport': '合肥新桥', 'FlightArrAirport': '北京首都', " +
+      "'FlightTerminal': 'T3', 'OntimeRate': '100.00%'}]}";
+
+    const flightCard = buildUiCard('tripmatch__searchFlightsByDepArr', flightPayload);
+    check(
+      '卡片：航班列表解析出航班号/时刻/机型和准点率',
+      Boolean(
+        flightCard &&
+          flightCard.type === 'flight-list' &&
+          flightCard.rows[0].depTime === '16:15' &&
+          flightCard.rows[0].duration === '1h32m' &&
+          flightCard.rows[0].airline === '中国国际航空' &&
+          flightCard.rows[0].ontimeRate === '100.00%'
+      ),
+      flightCard ? JSON.stringify(flightCard.rows[0]) : '没生成卡片'
+    );
+
+    check(
+      '卡片：服务端返回"暂无数据"时不生成空卡片',
+      buildUiCard('tripmatch__getFlightPriceByCities', "Flight prices: {'code': 200, 'data': {'error_code': 10, 'error': '暂无数据'}}") === null
+    );
+    check('卡片：非列表结果（天气对象）不生成卡片', buildUiCard('weather', { now: { text: '多云' } }) === null);
   })();
 }
 
@@ -1018,6 +1109,42 @@ async function runE2ETests() {
     );
   }
 
+  // --- 结构化卡片：问火车会下发 card 事件 ---
+  const trainResponse = await postJson('/api/chat/stream', {
+    message: '查一下 12 月 4 日合肥到北京的火车票',
+    sessionId: 'smoke-train-01',
+  });
+  const trainSse = await readSse(trainResponse);
+  const trainCard = trainSse.cards[0];
+
+  check(
+    '火车问题会下发 card 事件',
+    trainSse.events.includes('card') && trainSse.cards.length === 1,
+    `card ${trainSse.cards.length} 个`
+  );
+  check(
+    '卡片数据来自工具结果，不是模型复述',
+    Boolean(
+      trainCard &&
+        trainCard.type === 'train-list' &&
+        trainCard.rows.length === 2 &&
+        trainCard.rows[0].trainNumber === 'G52' &&
+        trainCard.rows[0].seat.soldOut === true
+    ),
+    trainCard ? `${trainCard.title}：${trainCard.rows.map((r) => r.trainNumber).join('/')}` : '无卡片'
+  );
+  check(
+    '卡片在正文之前下发（前端先卡片后文字）',
+    trainSse.events.indexOf('card') > -1 && trainSse.events.indexOf('card') < trainSse.events.lastIndexOf('delta')
+  );
+  check(
+    'MCP 工具按命名空间注入模型',
+    Boolean(
+      trainRoundBody &&
+        (trainRoundBody.tools || []).some((t) => t.function.name === 'tripmatch__train_search')
+    )
+  );
+
   // --- 会话隔离：清空只能清自己 ---
   const other = await postJson('/api/chat', { message: '长沙天气怎么样', sessionId: 'other-session-01' });
   const otherBody = await other.json();
@@ -1031,7 +1158,7 @@ async function runE2ETests() {
   check('按 sessionId 清空返回成功', clearOne.status === 200 && clearOneBody.success === true);
   check(
     '清空只删自己那一个会话',
-    beforeClear.sessions === 2 && afterClear.sessions === 1,
+    beforeClear.sessions === 3 && afterClear.sessions === 2,
     `${beforeClear.sessions} → ${afterClear.sessions}`
   );
 
@@ -1040,7 +1167,7 @@ async function runE2ETests() {
   check('不带 sessionId 的清空请求被拒绝（400）', clearAll.status === 400 && Boolean(clearAllBody.error));
 
   const leftover = await (await fetch(`${baseUrl}/health`)).json();
-  check('被拒绝的请求没有误删任何会话', leftover.sessions === 1, `实际 ${leftover.sessions}`);
+  check('被拒绝的请求没有误删任何会话', leftover.sessions === 2, `实际 ${leftover.sessions}`);
 }
 
 // ---------------------------------------------------------------------------

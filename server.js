@@ -32,6 +32,7 @@ const { ToolRegistry } = require('./src/tool-registry');
 const { createStaticMapService, createMapImageTool, STATICMAP_PATH } = require('./src/static-map');
 const { FeishuClient, createFeishuExportTool } = require('./src/feishu');
 const { McpClient, registerMcpTools } = require('./src/mcp-client');
+const { buildUiCard } = require('./src/ui-cards');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
@@ -306,6 +307,11 @@ function createApp(config, deps = createDeps(config)) {
       const reply = await agent.run(working, {
         signal: controller.signal,
         onDelta: (delta) => send('delta', { content: delta }),
+        // 结构化的工具结果直接推成卡片事件，前端原样渲染，不劳模型复述
+        onToolResult: (toolName, toolResult) => {
+          const card = buildUiCard(toolName, toolResult);
+          if (card) send('card', card);
+        },
       });
 
       sessions.appendTurn(input.sessionId, input.message, reply);
