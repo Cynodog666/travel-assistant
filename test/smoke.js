@@ -577,15 +577,16 @@ function runUnitTests() {
     check('静态图：坐标和地址能区分开', looksLikeCoords('112.9,28.2') && !looksLikeCoords('长沙岳麓山'));
 
     // --- 飞书云文档导出 ---
-    const { FeishuClient, explainFeishuError } = require('../src/feishu');
+    const { FeishuClient, explainFeishuError, sanitizeBlocks } = require('../src/feishu');
 
     const feishuCalls = [];
     const fakeFeishuHttp = {
       async request(config) {
         feishuCalls.push(config);
         const path = String(config.url || '').replace('https://open.feishu.cn', '');
+        // 真实接口把 token 放在响应根部，不在 data 里
         if (path === '/open-apis/auth/v3/tenant_access_token/internal') {
-          return { data: { code: 0, data: { tenant_access_token: 't-1', expire: 7200 } } };
+          return { data: { code: 0, msg: 'ok', tenant_access_token: 't-1', expire: 7200 } };
         }
         if (path === '/open-apis/docx/v1/documents') {
           return { data: { code: 0, data: { document: { document_id: 'doxcn1', revision_id: 1, title: config.data.title } } } };
@@ -615,6 +616,15 @@ function runUnitTests() {
         if (path.includes('/blocks/') && path.endsWith('/descendant')) {
           return { data: { code: 0, data: { block_id_relations: [] } } };
         }
+        // 故意返回一个和 webOrigin 不同的域名，用来证明链接是问飞书要的
+        if (path === '/open-apis/drive/v1/metas/batch_query') {
+          return {
+            data: {
+              code: 0,
+              data: { metas: [{ doc_token: 'doxcn1', url: 'https://real-tenant.feishu.cn/docx/doxcn1' }] },
+            },
+          };
+        }
         if (path.includes('/permissions/')) return { data: { code: 0, data: {} } };
         return { data: { code: 999, msg: 'unexpected ' + path } };
       },
@@ -637,7 +647,7 @@ function runUnitTests() {
     const insertCall = feishuCalls.find((c) => String(c.url).endsWith('/descendant'));
     const permCall = feishuCalls.find((c) => String(c.url).endsWith('/members'));
 
-    check('飞书：导出返回可分享链接', exported.url === 'https://demo.feishu.cn/docx/doxcn1', exported.url);
+    check('飞书：导出返回飞书给的真实链接（不是拼域名）', exported.url === 'https://real-tenant.feishu.cn/docx/doxcn1', exported.url);
     check('飞书：tenant_access_token 只取一次（复用缓存）', tokenCalls === 1, `实际 ${tokenCalls} 次`);
     check('飞书：建文档时带上文件夹 token', Boolean(createCall && createCall.data.folder_token === 'fld_test'));
     check(
@@ -677,7 +687,7 @@ function runUnitTests() {
       http: {
         async request(config) {
           if (String(config.url).endsWith('/tenant_access_token/internal')) {
-            return { data: { code: 0, data: { tenant_access_token: 't-2', expire: 7200 } } };
+            return { data: { code: 0, msg: 'ok', tenant_access_token: 't-2', expire: 7200 } };
           }
           batchCalls.push(config);
           return { data: { code: 0, data: {} } };
@@ -696,7 +706,32 @@ function runUnitTests() {
     check(
       '飞书：错误码映射成可读提示',
       explainFeishuError(1770040, 'no permission').includes('权限') &&
-        explainFeishuError(99991400, 'rate').includes('限流')
+        explainFeishuError(99991400, 'rate').includes('限流') &&
+        explainFeishuError(21001, 'policy').includes('21001')
+    );
+
+    // 真实环境踩到过：merge_info 藏在 table.property 里，只删顶层会导致 1770001
+    const cleanedTable = sanitizeBlocks([
+      {
+        block_id: 't1',
+        block_type: 31,
+        revision_id: 2,
+        parent_id: 'doc',
+        children: ['c1'],
+        table: {
+          cells: ['c1'],
+          property: { row_size: 1, column_size: 1, merge_info: [{ row_span: 1 }] },
+        },
+      },
+    ]);
+    const dumped = JSON.stringify(cleanedTable);
+    check(
+      '飞书：表格的 merge_info / cells 被递归剔除',
+      !dumped.includes('merge_info') &&
+        !dumped.includes('cells') &&
+        !dumped.includes('revision_id') &&
+        cleanedTable[0].children.join() === 'c1',
+      dumped.slice(0, 90)
     );
   })();
 }
