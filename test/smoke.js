@@ -538,6 +538,26 @@ function runUnitTests() {
 
     const notFound = await qweather.run('weather', { city: '' });
     check('和风 weather：缺少 city 时返回结构化错误', Boolean(notFound.error));
+
+    // 域名解析失败是最常见的配置错误（把文档里的示例地址当成了自己的 API Host）
+    const wrongHost = new QWeatherClient({
+      apiKey: 'k',
+      baseUrl: 'https://example-not-mine.qweatherapi.com',
+      http: {
+        async get() {
+          const error = new Error('getaddrinfo ENOTFOUND');
+          error.code = 'ENOTFOUND';
+          throw error;
+        },
+      },
+    });
+    let hostHint = '';
+    try {
+      await wrongHost.run('weather', { city: '长沙' });
+    } catch (error) {
+      hostHint = error.message;
+    }
+    check('和风：域名解析失败时提示去核对 API Host', /API Host/.test(hostHint), hostHint.slice(0, 32));
   })();
 }
 

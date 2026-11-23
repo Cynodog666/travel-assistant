@@ -84,6 +84,19 @@ class QWeatherClient {
         throw new Error('和风天气鉴权失败（401/403）：检查 QWEATHER_API_KEY 和 QWEATHER_BASE_URL 是否匹配');
       }
       if (status === 404) throw new Error(`和风天气接口路径不存在：${path}`);
+
+      // 最常见的两种配置错误，单独给出能直接照做的提示
+      const code = error && error.code;
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+        throw new Error(
+          `和风天气域名解析失败（${this.baseUrl}）。QWEATHER_BASE_URL 必须是控制台「设置」里分给你的真实 API Host，` +
+            '不能照抄文档或示例里的地址，也不要带多余路径'
+        );
+      }
+      if (code === 'ETIMEDOUT' || code === 'ECONNABORTED') {
+        throw new Error(`和风天气请求超时（${this.timeoutMs}ms），检查服务器出网或 QWEATHER_TIMEOUT_MS`);
+      }
+
       throw new Error(`和风天气请求失败：${(error && error.message) || '未知错误'}`);
     }
 

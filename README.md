@@ -330,7 +330,7 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `AMAP_TIMEOUT_MS` | 否 | `8000` | 高德接口超时 |
 | `AMAP_CACHE_SIZE` | 否 | `200` | 高德接口缓存条数 |
 | `QWEATHER_API_KEY` | 否 | — | 和风天气 API Key；不填就用高德自带的实时天气 |
-| `QWEATHER_BASE_URL` | 配和风时必填 | — | 控制台给的专属 API Host，如 `https://abc.re.qweatherapi.com` |
+| `QWEATHER_BASE_URL` | 配和风时必填 | — | 控制台「设置」里分给你的 API Host，前面补 `https://`（别照抄文档里的示例地址） |
 | `QWEATHER_TIMEOUT_MS` | 否 | `8000` | 和风接口超时 |
 | `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
 | `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
