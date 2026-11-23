@@ -33,6 +33,7 @@ const { createStaticMapService, createMapImageTool, STATICMAP_PATH } = require('
 const { FeishuClient, createFeishuExportTool } = require('./src/feishu');
 const { McpClient, registerMcpTools } = require('./src/mcp-client');
 const { buildUiCard } = require('./src/ui-cards');
+const { normalizeMcpResult } = require('./src/tripmatch-format');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
@@ -460,6 +461,18 @@ async function main() {
         prefix: config.tripMatchPrefix,
         allow: config.tripMatchToolAllow,
       });
+
+      // 火车票结果交给模型前先规范化：补上「高铁/动车/普速」，去掉无用字段。
+      // 原始返回里没有车次类型，模型只能靠前缀猜，会把 V 开头的普速夜车也叫成高铁。
+      for (const name of registered) {
+        if (!/train/i.test(name)) continue;
+        const original = deps.registry.handlers.get(name);
+        if (!original) continue;
+        deps.registry.handlers.set(name, async (args, options) => {
+          const raw = await original(args, options);
+          return normalizeMcpResult(name, raw);
+        });
+      }
       deps.mcp = mcp;
       console.log(`[MCP] Tripmatch 已接入：注册 ${registered.length}/${total} 个工具`);
       console.log(`      ${registered.join(', ')}`);

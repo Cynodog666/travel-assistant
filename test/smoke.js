@@ -1047,6 +1047,66 @@ function runUnitTests() {
     );
     check('卡片：非列表结果（天气对象）不生成卡片', buildUiCard('weather', { now: { text: '多云' } }) === null);
 
+    // --- 车次类型判定（原始数据没有这个字段，必须确定性推导）---
+    const { classifyTrain } = require('../src/train-types');
+    const { normalizeMcpResult } = require('../src/tripmatch-format');
+
+    const typeCases = [
+      ['G52', 'high-speed'],
+      ['C2001', 'high-speed'],
+      ['D302', 'high-speed'],
+      ['S101', 'high-speed'],
+      ['Z227', 'normal'],
+      ['T110', 'normal'],
+      ['K816', 'normal'],
+      ['V1036', 'normal'],
+      ['1462', 'normal'],
+    ];
+    const typeProblems = typeCases.filter(([no, expected]) => classifyTrain(no).category !== expected);
+    check('车次类型：G/C/D/S 算高铁动车，Z/T/K/V/数字算普速', typeProblems.length === 0, typeProblems.map(([n]) => n).join(',') || '全部正确');
+
+    const mixedPayload =
+      "Train tickets: {'code': 200, 'data': {'data': [" +
+      "{'trainNumber': 'G52', 'fromStation': '合肥南', 'toStation': '北京南', 'fromTime': '07:18', 'toTime': '10:55', 'useTime': 217, " +
+      "'seatLists': [{'seatName': '二等座', 'seatPrice': 473.5, 'ticketLeft': 0}]}, " +
+      "{'trainNumber': 'V1036', 'fromStation': '合肥', 'toStation': '北京丰台', 'fromTime': '20:45', 'toTime': '11:12', 'useTime': 867, " +
+      "'seatLists': [{'seatName': '软卧', 'seatPrice': 381.5, 'ticketLeft': 19}]}]}}";
+
+    const mixedCard = buildUiCard('tripmatch__searchTrainTickets', mixedPayload);
+    check(
+      '卡片：每行带车次类型标记',
+      Boolean(mixedCard && mixedCard.rows[0].trainType === '高铁' && mixedCard.rows[0].highSpeed === true && mixedCard.rows[1].trainType === '普速' && mixedCard.rows[1].highSpeed === false),
+      mixedCard ? mixedCard.rows.map((r) => `${r.trainNumber}:${r.trainType}`).join(' ') : '无卡片'
+    );
+    check(
+      '卡片：底部统计高铁/普速各几趟',
+      Boolean(mixedCard && /高铁\/动车 1 趟 · 普速 1 趟/.test(mixedCard.footer)),
+      mixedCard && mixedCard.footer
+    );
+
+    const normalized = normalizeMcpResult('tripmatch__searchTrainTickets', mixedPayload);
+    check(
+      '工具结果：交给模型前补上 trainType / highSpeed 并压掉冗余字段',
+      Boolean(
+        normalized &&
+          normalized.trains.length === 2 &&
+          normalized.trains[0].trainType === '高铁' &&
+          normalized.trains[1].trainType === '普速' &&
+          normalized.trains[1].highSpeed === false &&
+          !JSON.stringify(normalized).includes('fromTccode')
+      ),
+      normalized ? JSON.stringify(normalized.trains[1]).slice(0, 120) : '未规范化'
+    );
+    check(
+      '工具结果：直接给成品时长，模型不用自己算',
+      Boolean(normalized && normalized.trains[0].duration === '3h37m' && normalized.trains[1].duration === '14h27m'),
+      normalized ? normalized.trains.map((t) => `${t.trainNumber}=${t.duration}`).join(' ') : ''
+    );
+    check(
+      '工具结果：非火车类结果原样透传',
+      normalizeMcpResult('tripmatch__getTodayDate', "Today's date: 2026-11-23") === "Today's date: 2026-11-23"
+    );
+
     // --- 工具 skill 包：按需加载（省 prompt）---
     const { SkillCatalog, createToolsResolver } = require('../src/tool-skills');
     const skillRegistry = new ToolRegistry();

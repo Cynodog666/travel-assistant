@@ -234,6 +234,7 @@
         body.appendChild(
           makeRow([
             { text: row.trainNumber, cls: 'chat-card-strong' },
+            { text: row.trainType || '', cls: 'chat-card-badge' + (row.highSpeed ? ' chat-card-badge--fast' : '') },
             { text: `${row.fromStation} ${row.fromTime}` },
             { text: '→', cls: 'chat-card-arrow' },
             { text: `${row.toStation} ${row.toTime}` },
