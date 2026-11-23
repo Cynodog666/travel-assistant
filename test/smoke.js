@@ -294,6 +294,7 @@ async function readSse(response) {
   let buffer = '';
   const events = [];
   const cards = [];
+  const statuses = [];
   let text = '';
   let doneContent = '';
 
@@ -314,10 +315,11 @@ async function readSse(response) {
       if (event === 'delta') text += payload.content || '';
       if (event === 'done') doneContent = payload.content || '';
       if (event === 'card') cards.push(payload);
+      if (event === 'status') statuses.push(payload.label);
     }
   }
 
-  return { events, text, doneContent, cards };
+  return { events, text, doneContent, cards, statuses };
 }
 
 /** 一个最小的 http 替身：记录调用，按 URL 返回假数据。 */
@@ -989,7 +991,7 @@ function runUnitTests() {
 
     // --- 工具结果 → 卡片 ---
     const { parsePythonLiteral } = require('../src/py-literal');
-    const { buildUiCard } = require('../src/ui-cards');
+    const { buildUiCard, toolProgressLabel } = require('../src/ui-cards');
 
     check(
       'Python 字面量：单引号、嵌套、None/True/False 都能解析',
@@ -1046,6 +1048,15 @@ function runUnitTests() {
       buildUiCard('tripmatch__getFlightPriceByCities', "Flight prices: {'code': 200, 'data': {'error_code': 10, 'error': '暂无数据'}}") === null
     );
     check('卡片：非列表结果（天气对象）不生成卡片', buildUiCard('weather', { now: { text: '多云' } }) === null);
+
+    check(
+      '进度文案：工具名映射成人话',
+      toolProgressLabel('tripmatch__searchTrainTickets') === '正在查车次…' &&
+        toolProgressLabel('weather') === '正在查天气…' &&
+        toolProgressLabel('export_to_feishu') === '正在生成飞书文档…' &&
+        toolProgressLabel('unknown_tool') === '正在调用 unknown_tool…',
+      toolProgressLabel('tripmatch__searchTrainTickets')
+    );
 
     // --- 车次类型判定（原始数据没有这个字段，必须确定性推导）---
     const { classifyTrain } = require('../src/train-types');
@@ -1327,6 +1338,11 @@ async function runE2ETests() {
   check(
     '卡片在正文之前下发（前端先卡片后文字）',
     trainSse.events.indexOf('card') > -1 && trainSse.events.indexOf('card') < trainSse.events.lastIndexOf('delta')
+  );
+  check(
+    '查票时会推 status 进度（"正在查车次…"），避免看起来卡死',
+    trainSse.statuses.includes('正在查车次…') && trainSse.statuses.includes('正在加载工具…'),
+    (trainSse.statuses || []).join(' / ')
   );
   check(
     'MCP 工具按命名空间注入模型',

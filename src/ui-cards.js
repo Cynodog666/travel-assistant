@@ -248,9 +248,37 @@ function buildUiCard(toolName, result) {
   return { ...card, source: String(toolName || ''), count: card.rows.length };
 }
 
+/**
+ * 工具名的中文进度文案：工具要跑几秒时，前端拿它替换"正在思考…"。
+ * 认不出来的就直接显示工具名，至少让人知道在做事。
+ */
+const TOOL_LABELS = [
+  [/todaydate/i, '正在确认日期…'],
+  [/train/i, '正在查车次…'],
+  [/flight/i, '正在查航班…'],
+  [/transfer/i, '正在算空铁联运…'],
+  [/station/i, '正在查车站…'],
+  [/weather/i, '正在查天气…'],
+  [/poi_search/i, '正在找地点…'],
+  [/route_planning/i, '正在规划路线…'],
+  [/geocode/i, '正在解析地址…'],
+  [/map_image/i, '正在生成地图…'],
+  [/export_to_feishu/i, '正在生成飞书文档…'],
+  [/use_skill/i, '正在加载工具…'],
+];
+
+function toolProgressLabel(toolName) {
+  const name = String(toolName || '');
+  for (const [pattern, label] of TOOL_LABELS) {
+    if (pattern.test(name)) return label;
+  }
+  return `正在调用 ${name || '工具'}…`;
+}
+
 module.exports = {
   buildUiCard,
   buildTrainCardFromNormalized,
+  toolProgressLabel,
   parseToolPayload,
   pickRows,
   buildTrainCard,

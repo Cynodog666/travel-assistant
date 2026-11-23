@@ -32,7 +32,7 @@ const { ToolRegistry } = require('./src/tool-registry');
 const { createStaticMapService, createMapImageTool, STATICMAP_PATH } = require('./src/static-map');
 const { FeishuClient, createFeishuExportTool } = require('./src/feishu');
 const { McpClient, registerMcpTools } = require('./src/mcp-client');
-const { buildUiCard } = require('./src/ui-cards');
+const { buildUiCard, toolProgressLabel } = require('./src/ui-cards');
 const { normalizeMcpResult } = require('./src/tripmatch-format');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
@@ -361,6 +361,8 @@ function createApp(config, deps = createDeps(config)) {
         sessionId: input.sessionId,
         getTools,
         onDelta: (delta) => send('delta', { content: delta }),
+        // 工具要跑几秒（尤其远程 MCP），先告诉前端在干什么，避免看着像卡死
+        onToolStart: (toolName) => send('status', { label: toolProgressLabel(toolName) }),
         // 结构化的工具结果直接推成卡片事件，前端原样渲染，不劳模型复述
         onToolResult: (toolName, toolResult) => {
           const card = buildUiCard(toolName, toolResult);

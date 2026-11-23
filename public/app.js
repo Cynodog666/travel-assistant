@@ -319,11 +319,20 @@
     els.messageInput.style.height = 'auto';
     setBusy(true);
 
-    // 占位气泡，收到第一个 delta 开始替换；遇到卡片事件就另起一个气泡
+    // 占位气泡：有内容前一直复用它；一旦卡片插进来就把这个占位气泡删掉，
+    // 否则它会永远停在"正在思考…"，看着像卡死。
     let bubble = appendBubble('正在思考…', false);
+    let bubbleHasContent = false;
     const ensureBubble = () => {
-      if (!bubble) bubble = appendBubble('', false);
+      if (!bubble) {
+        bubble = appendBubble('', false);
+        bubbleHasContent = false;
+      }
       return bubble;
+    };
+    const showStatus = (label) => {
+      if (bubbleHasContent) return; // 已经在输出正文了，不要打断
+      (bubble || ensureBubble()).textContent = label;
     };
     let acc = '';
     let failed = false;
@@ -369,19 +378,25 @@
               sessionId = payload.sessionId;
               localStorage.setItem(SESSION_KEY, sessionId);
             }
+          } else if (event === 'status') {
+            showStatus(payload.label || '正在处理…');
           } else if (event === 'delta') {
             acc += payload.content || '';
             ensureBubble().innerHTML = renderMarkdown(acc);
+            bubbleHasContent = true;
             els.chatContainer.scrollTop = els.chatContainer.scrollHeight;
           } else if (event === 'card') {
             renderCard(payload);
-            // 卡片之后如果还有正文，让它另起一个气泡，别塞到卡片上面去
+            // 卡片之前如果只有占位气泡，把它删掉，再让后续正文另起一个气泡
+            if (bubble && !bubbleHasContent) bubble.remove();
             bubble = null;
+            bubbleHasContent = false;
           } else if (event === 'done') {
             // 以 done 的完整内容为准：万一某些分片丢了，这里还能补回来
             if (!acc && payload.content) {
               acc = payload.content;
               ensureBubble().innerHTML = renderMarkdown(acc);
+              bubbleHasContent = true;
             }
           } else if (event === 'error') {
             failed = true;

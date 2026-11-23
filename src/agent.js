@@ -184,7 +184,7 @@ class Agent {
    * Agent 主循环：模型决定调工具 -> 执行 -> 把结果回填 -> 再来一轮，直到产出最终回答。
    * 返回完整回答文本。
    */
-  async run(messages, { signal, onDelta, onToolResult, sessionId, getTools } = {}) {
+  async run(messages, { signal, onDelta, onToolResult, onToolStart, sessionId, getTools } = {}) {
     const config = this.config;
 
     for (let step = 0; step < config.maxToolSteps; step += 1) {
@@ -224,6 +224,14 @@ class Agent {
 
           let toolResult;
           try {
+            // 工具可能要跑几秒（MCP 远程调用），先告诉前端在干什么，别干等着像卡死
+            if (onToolStart) {
+              try {
+                onToolStart(call.function.name, args);
+              } catch {
+                /* 进度提示失败不影响主流程 */
+              }
+            }
             toolResult = await this.registry.run(call.function.name, args, { signal, sessionId });
           } catch (error) {
             if (error instanceof AgentAbortError) throw error;
