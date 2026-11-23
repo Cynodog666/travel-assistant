@@ -85,6 +85,7 @@ class FeishuClient {
     folderToken = '',
     shareTo = '',
     shareMemberType = 'email',
+    linkShare = '',
     timeoutMs = 15000,
     http = axios,
   }) {
@@ -95,7 +96,9 @@ class FeishuClient {
     this.webOrigin = String(webOrigin || '').replace(/\/+$/, '');
     this.folderToken = folderToken || '';
     this.shareTo = shareTo || '';
-    this.shareMemberType = shareMemberType || 'email';
+    // 飞书那边叫 openid（没有下划线），这里顺手兼容一下常见写法
+    this.shareMemberType = String(shareMemberType || 'email').replace('_', '');
+    this.linkShare = linkShare || '';
     this.timeoutMs = timeoutMs;
     this.http = http;
     this.token = null;
@@ -217,6 +220,24 @@ class FeishuClient {
     return true;
   }
 
+  /**
+   * 设置链接分享。比「授权给某个邮箱」省事的地方在于：不需要知道对方是谁，
+   * 拿到链接就能看——特别适合"生成完直接把链接发出去"这种演示场景。
+   * value: anyone_readable（互联网可读）/ tenant_readable（组织内可读）/ off
+   */
+  async setLinkShare(documentId, value) {
+    if (!value || value === 'off') return false;
+    const body = { link_share_entity: value };
+    if (value === 'anyone_readable') body.external_access = true;
+
+    await this.request(
+      'PATCH',
+      `/open-apis/drive/v1/permissions/${encodeURIComponent(documentId)}/public`,
+      { query: { type: 'docx' }, body }
+    );
+    return true;
+  }
+
   documentUrl(documentId) {
     return this.webOrigin ? `${this.webOrigin}/docx/${documentId}` : '';
   }
@@ -232,13 +253,25 @@ class FeishuClient {
     const converted = await this.convertMarkdown(String(markdown));
     const inserted = await this.insertBlocks(documentId, converted);
 
+    // 两种授信方式，能配哪个配哪个，都失败也不影响文档本身已经建好
+    let linkShared = false;
     let shared = false;
-    let shareError = '';
-    try {
-      shared = await this.grantPermission(documentId);
-    } catch (error) {
-      // 授权失败不影响文档本身已经建好，把原因带回去让用户自己处理
-      shareError = error.message;
+    const shareErrors = [];
+
+    if (this.linkShare) {
+      try {
+        linkShared = await this.setLinkShare(documentId, this.linkShare);
+      } catch (error) {
+        shareErrors.push(`链接分享设置失败：${error.message}`);
+      }
+    }
+
+    if (this.shareTo) {
+      try {
+        shared = await this.grantPermission(documentId);
+      } catch (error) {
+        shareErrors.push(`协作者授权失败：${error.message}`);
+      }
     }
 
     return {
@@ -246,7 +279,8 @@ class FeishuClient {
       url: this.documentUrl(documentId),
       blocks: inserted,
       shared,
-      shareError,
+      linkShared,
+      shareError: shareErrors.join('；'),
     };
   }
 }

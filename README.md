@@ -197,22 +197,31 @@ map_image 工具 ──► 服务端用 HMAC 签一个 /api/staticmap?location=.
    - **云文档权限**（把文档授权给你自己用的；找不到就先跳过，见下面「打不开文档」）
 4. 左侧「版本管理与发布」→ **创建版本** → 提交发布。企业版需要管理员审核，个人版一般直接通过
 5. 在浏览器打开飞书，地址栏形如 `https://yourname.feishu.cn` —— 这串就是 `FEISHU_WEB_ORIGIN`
-6. 把值填进 `.env`：
+6. 把值填进 `.env`。**你不需要知道自己的邮箱**，用链接分享最省事：
 
 ```bash
 FEISHU_APP_ID=cli_xxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx
 FEISHU_WEB_ORIGIN=https://yourname.feishu.cn
-FEISHU_SHARE_TO=你的飞书登录邮箱
+# 互联网上拿到链接就能看（适合"把链接发给别人"）
+FEISHU_LINK_SHARE=anyone_readable
 ```
+
+如果只想让公司内部的人看，改成 `tenant_readable`。想精确指定某个人，就用
+`FEISHU_SHARE_TO=你的邮箱`（或 `openid`），不设 `FEISHU_LINK_SHARE` 也行。
 
 7. 重启服务，`/api/health` 里应该出现 `"feishu": true` 和 `export_to_feishu` 工具
 
-### 为什么还要 `FEISHU_SHARE_TO`
+### 为什么还要授权/分享
 
-用 `tenant_access_token` 创建的文档**归属方是"应用"**，不是"你"。不授权的话，文档建成功了你也打不开——
-这是飞书的身份模型，不是 bug。所以创建完会调一次「添加协作者」接口，把你加进去（`full_access`）。
-如果这一步报权限错误，就是缺「云文档权限」这个 scope，去第 3 步补上再发布一次版本。
+用 `tenant_access_token` 创建的文档**归属方是"应用"**，不是"你"。不分享的话，文档建成功了你也打不开——
+这是飞书的身份模型，不是 bug。所以创建完会做两件事（配了哪个做哪个）：
+
+- `FEISHU_LINK_SHARE` → 调 `PATCH /drive/v1/permissions/{id}/public` 设置链接分享；
+- `FEISHU_SHARE_TO` → 调 `POST /drive/v1/permissions/{id}/members` 把你加成 `full_access` 协作者。
+
+两个都失败也不影响文档已经建好，返回结果里会带 `shareError` 说明原因。授权那步报权限错误，
+通常是缺「云文档权限」这个 scope，回第 3 步补上再发布一次版本。
 
 ### 实现上的几个细节
 
@@ -408,8 +417,9 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `FEISHU_APP_ID` | 否 | — | 飞书自建应用 App ID；不填就不注册飞书导出工具 |
 | `FEISHU_APP_SECRET` | 配飞书时必填 | — | 飞书自建应用 App Secret（与 App ID 必须成对） |
 | `FEISHU_WEB_ORIGIN` | 配飞书时建议填 | — | 租户域名，如 `https://yourname.feishu.cn`，用来拼文档链接 |
-| `FEISHU_SHARE_TO` | 配飞书时建议填 | — | 文档授权给谁（你的登录邮箱），否则你打不开这篇文档 |
-| `FEISHU_SHARE_MEMBER_TYPE` | 否 | `email` | 授权成员类型：`email` / `open_id` |
+| `FEISHU_LINK_SHARE` | 否 | — | `anyone_readable`（互联网可读）/ `tenant_readable`（组织内可读）/ 留空不设置 |
+| `FEISHU_SHARE_TO` | 二选一 | — | 文档授权给谁（邮箱或 `openid`），比链接分享多一步但权限更明确 |
+| `FEISHU_SHARE_MEMBER_TYPE` | 否 | `email` | 授权成员类型：`email` / `openid` / `unionid` |
 | `FEISHU_FOLDER_TOKEN` | 否 | — | 指定文件夹，一般留空（tenant token 通常只能指定应用自建文件夹） |
 | `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
 | `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
@@ -512,7 +522,7 @@ npm test
   PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：66 通过 / 0 失败
+结果：68 通过 / 0 失败
 ```
 
 ---

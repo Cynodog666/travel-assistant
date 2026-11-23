@@ -626,6 +626,7 @@ function runUnitTests() {
       webOrigin: 'https://demo.feishu.cn',
       folderToken: 'fld_test',
       shareTo: 'me@example.com',
+      linkShare: 'anyone_readable',
       http: fakeFeishuHttp,
     });
 
@@ -634,7 +635,7 @@ function runUnitTests() {
     const createCall = feishuCalls.find((c) => String(c.url).endsWith('/open-apis/docx/v1/documents'));
     const convertCall = feishuCalls.find((c) => String(c.url).endsWith('/blocks/convert'));
     const insertCall = feishuCalls.find((c) => String(c.url).endsWith('/descendant'));
-    const permCall = feishuCalls.find((c) => String(c.url).includes('/permissions/'));
+    const permCall = feishuCalls.find((c) => String(c.url).endsWith('/members'));
 
     check('飞书：导出返回可分享链接', exported.url === 'https://demo.feishu.cn/docx/doxcn1', exported.url);
     check('飞书：tenant_access_token 只取一次（复用缓存）', tokenCalls === 1, `实际 ${tokenCalls} 次`);
@@ -651,6 +652,22 @@ function runUnitTests() {
     check('飞书：表格与单元格的父子关系保留', Boolean(tableBlock && tableBlock.children.join() === 'c1') && insertedIds.includes('p1'));
     check('飞书：一级块作为 children_id 提交', Boolean(insertCall && insertCall.data.children_id.join() === 'h1,t1'));
     check('飞书：给分享对象授了权限', Boolean(permCall && permCall.data.member_id === 'me@example.com') && exported.shared === true);
+
+    const publicCall = feishuCalls.find((c) => String(c.url).endsWith('/public'));
+    check(
+      '飞书：可设成「互联网可读」链接分享（不需要邮箱）',
+      Boolean(
+        publicCall &&
+          publicCall.method === 'PATCH' &&
+          publicCall.data.link_share_entity === 'anyone_readable' &&
+          publicCall.data.external_access === true &&
+          publicCall.params.type === 'docx'
+      ) && exported.linkShared === true
+    );
+    check(
+      '飞书：member_type 兼容 open_id 写法',
+      new FeishuClient({ appId: 'a', appSecret: 'b', shareMemberType: 'open_id' }).shareMemberType === 'openid'
+    );
 
     // 超过 50 个一级块时分批
     const batchCalls = [];

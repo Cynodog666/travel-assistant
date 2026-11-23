@@ -107,6 +107,7 @@ function createDeps(config) {
         folderToken: config.feishuFolderToken,
         shareTo: config.feishuShareTo,
         shareMemberType: config.feishuShareMemberType,
+        linkShare: config.feishuLinkShare,
       })
     : null;
   const feishuTool = feishu ? createFeishuExportTool({ client: feishu }) : null;

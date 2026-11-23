@@ -74,9 +74,11 @@ function loadConfig(env = process.env) {
     feishuAppSecret: (env.FEISHU_APP_SECRET || '').trim(),
     feishuWebOrigin: (env.FEISHU_WEB_ORIGIN || '').trim().replace(/\/+$/, ''),
     feishuFolderToken: (env.FEISHU_FOLDER_TOKEN || '').trim(),
-    // 文档归属于「应用」，要把文档授权给某个人你才打得开：填邮箱或 open_id
+    // 文档归属于「应用」，要把文档授权给某个人你才打得开：填邮箱或 openid
     feishuShareTo: (env.FEISHU_SHARE_TO || '').trim(),
     feishuShareMemberType: (env.FEISHU_SHARE_MEMBER_TYPE || 'email').trim(),
+    // 链接分享：anyone_readable（互联网可读）/ tenant_readable（组织内可读）/ 留空不设置
+    feishuLinkShare: (env.FEISHU_LINK_SHARE || '').trim(),
 
     // 静态地图签名密钥：留空则退化为「ACCESS_TOKEN 或 AMAP_KEY」，
     // 想单独轮换图片链接的有效性时再设置它。
