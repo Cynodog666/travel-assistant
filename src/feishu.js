@@ -35,9 +35,9 @@ function explainFeishuError(code, msg) {
   if (code === 99991400) return `飞书接口被限流了（${msg || '频率超限'}），稍后重试`;
   if (code === 21001) {
     return (
-      '飞书返回 21001（Access denied due to platform policy）：应用还没真正生效。' +
-      '检查「版本管理与发布」里版本是否为已发布/已上线、企业管理员是否已启用该应用、' +
-      '应用「安全设置」里的 IP 白名单是否漏了服务器出口 IP'
+      '飞书返回 21001（Access denied due to platform policy）：应用级被拒，连令牌都不签发。' +
+      '最可能是应用未启用/版本未发布，或账号是个人版（个人版拿不到 tenant_access_token）。' +
+      '先用开放平台「API 调试台」用同一对凭证试一次：那边也报 21001 就说明与代码无关'
     );
   }
   if (code === 1770040 || code === 1770032) {
@@ -129,15 +129,28 @@ class FeishuClient {
     } catch (error) {
       const status = error && error.response && error.response.status;
       const detail = error && error.response && error.response.data;
+      // 飞书的 log_id 在响应头里，提工单/找客服时只有它能定位到具体那次请求
+      const logId =
+        (error && error.response && error.response.headers &&
+          (error.response.headers['x-tt-logid'] || error.response.headers['X-Tt-Logid'])) ||
+        (detail && detail.error && detail.error.log_id) ||
+        '';
+
       if (detail && typeof detail === 'object' && detail.code !== undefined) {
-        throw new Error(explainFeishuError(detail.code, detail.msg));
+        const hint = explainFeishuError(detail.code, detail.msg);
+        throw new Error(logId ? `${hint}｜log_id=${logId}` : hint);
       }
       throw new Error(`飞书请求失败（HTTP ${status || '?'}）：${(error && error.message) || '未知错误'}`);
     }
 
     const payload = response.data || {};
     if (payload.code !== 0) {
-      throw new Error(explainFeishuError(payload.code, payload.msg));
+      const logId =
+        (response.headers && (response.headers['x-tt-logid'] || response.headers['X-Tt-Logid'])) ||
+        (payload.error && payload.error.log_id) ||
+        '';
+      const hint = explainFeishuError(payload.code, payload.msg);
+      throw new Error(logId ? `${hint}｜log_id=${logId}` : hint);
     }
     return payload.data || {};
   }

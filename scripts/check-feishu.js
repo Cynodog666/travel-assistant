@@ -56,12 +56,15 @@ const fail = (label, detail = '') => console.log(`  FAIL  ${label}${detail ? `  
     pass('获取 tenant_access_token');
   } catch (error) {
     fail('获取 tenant_access_token', error.message);
-    console.log('\n  排查顺序：');
-    console.log('    1. 开发者后台「版本管理与发布」里，版本状态是不是「已发布 / 已上线」？');
-    console.log('      只保存草稿或显示「审核中」时，接口会返回 21001。');
-    console.log('    2. 企业版需要管理员在 admin.feishu.cn 审核通过并启用这个应用。');
-    console.log('    3. 应用「安全设置」里如果开了 IP 白名单，要把服务器出口 IP 加进去，或临时关掉。');
-    console.log('    4. 确认应用类型是「企业自建应用」，不是商店应用/网页应用。');
+    console.log('\n  这个错误发生在「拿令牌」阶段，还没碰到任何文档 API。');
+    console.log('  按可能性从高到低查：');
+    console.log('    1. 账号是不是「个人版」？个人版账号目前拿不到 tenant_access_token（飞书平台策略，');
+    console.log('       社区里已有多起同样报告）。需要先创建/加入一个企业组织，再在该企业下建应用。');
+    console.log('    2. 企业版：「版本管理与发布」里版本是否已发布上线；管理员是否在 admin.feishu.cn 启用了应用。');
+    console.log('    3. 应用「安全设置」里的 IP 白名单 / API 访问控制，是否漏了服务器出口 IP。');
+    console.log('    4. 应用「可用范围」是否包含你所在的部门。');
+    console.log('    5. 确认应用类型是「企业自建应用」，不是商店应用/网页应用。');
+    console.log('\n  拿不准的话：把上面这行完整报错（含 log_id）贴给飞书客服，他们能直接定位租户策略。');
     process.exit(1);
   }
 
