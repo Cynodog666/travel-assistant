@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>坤坤 - 旅游管家</title>
+    <style>
+        /* 不引外部字体：部署在境外/内网时它会拖慢首屏，而且离线打不开 */
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        
+        body { 
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+        }
+        
+        /* 启动动画 - 简洁橙色圆球 */
+        .splash-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .circle {
+            width: 0;
+            height: 0;
+            background: linear-gradient(135deg, #ff7e5f, #feb47b);
+            border-radius: 50%;
+            animation: expandCircle 1.5s ease-out forwards;
+            box-shadow: 0 0 80px rgba(255,126,95,0.4);
+        }
+        
+        @keyframes expandCircle {
+            0% { 
+                width: 0; 
+                height: 0; 
+                opacity: 0;
+            }
+            70% { 
+                width: 60vh; 
+                height: 60vh; 
+                opacity: 1;
+                transform: scale(1.1);
+            }
+            100% { 
+                width: 50vh; 
+                height: 50vh; 
+                opacity: 1;
+            }
+        }
+        
+        .welcome-text {
+            color: #ffffff;
+            font-size: 3vh;
+            text-align: center;
+            margin-top: 50px;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: textAppear 1s ease-out 1.5s forwards;
+            text-shadow: 0 0 20px rgba(255,126,95,0.6);
+        }
+        
+        @keyframes textAppear {
+            from { 
+                opacity: 0; 
+                transform: translateY(20px); 
+            }
+            to { 
+                opacity: 1; 
+                transform: translateY(0); 
+            }
+        }
+        
+        /* 主界面样式 */
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+            opacity: 0;
+            animation: fadeIn 1s ease-out forwards;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #ff7e5f, #feb47b);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #a8d8ea;
+            font-size: 1rem;
+        }
+        
+        .chat-container {
+            flex: 1;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 20px;
+        }
+        
+        .chat-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .chat-container::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+        }
+        
+        .chat-container::-webkit-scrollbar-thumb {
+            background: rgba(168, 216, 234, 0.3);
+            border-radius: 10px;
+        }
+        
+        .message {
+            padding: 18px 24px;
+            border-radius: 20px;
+            max-width: 75%;
+            line-height: 1.6;
+            font-size: 15px;
+            position: relative;
+            animation: slideIn 0.3s ease-out;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        @keyframes slideIn {
+            from { 
+                opacity: 0; 
+                transform: translateY(10px); 
+            }
+            to { 
+                opacity: 1; 
+                transform: translateY(0); 
+            }
+        }
+        
+        .user-message {
+            background: linear-gradient(135deg, #ff7e5f, #feb47b);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 5px;
+            box-shadow: 0 4px 15px rgba(255, 126, 95, 0.2);
+        }
+        
+        .ai-message {
+            background: rgba(255, 255, 255, 0.1);
+            color: #e8f4f8;
+            align-self: flex-start;
+            border-bottom-left-radius: 5px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .input-area {
+            display: flex;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        #message-input {
+            flex: 1;
+            padding: 15px 20px;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #e8f4f8;
+            font-size: 15px;
+            resize: none;
+            min-height: 50px;
+            max-height: 200px;
+        }
+        
+        #message-input::placeholder {
+            color: rgba(168, 216, 234, 0.5);
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding-right: 5px;
+        }
+        
+        .btn {
+            padding: 12px 20px;
+            border-radius: 20px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #send-button {
+            background: linear-gradient(135deg, #ff7e5f, #feb47b);
+            color: white;
+        }
+        
+        #send-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 126, 95, 0.3);
+        }
+        
+        #send-button:disabled {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.5);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        #clear-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: #a8d8ea;
+        }
+        
+        #clear-button:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+        
+        #save-button {
+            background: rgba(168, 216, 234, 0.2);
+            color: #a8d8ea;
+        }
+        
+        #save-button:hover {
+            background: rgba(168, 216, 234, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .typing {
+            display: flex;
+            gap: 8px;
+            padding: 18px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            align-self: flex-start;
+            border-bottom-left-radius: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #a8d8ea;
+            animation: typing 1.4s infinite ease-in-out both;
+        }
+        
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0.4); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        
+        /* ============ 移动端适配 ============ */
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+                padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            }
+
+            .header {
+                margin-bottom: 12px;
+            }
+
+            .header h1 {
+                font-size: 1.6rem;
+                margin-bottom: 4px;
+            }
+
+            .header p {
+                font-size: 0.85rem;
+            }
+
+            .chat-container {
+                padding: 12px;
+                gap: 12px;
+                margin-bottom: 12px;
+                border-radius: 12px;
+            }
+
+            .message {
+                max-width: 88%;
+                padding: 12px 16px;
+                font-size: 15px;
+            }
+
+            .input-area {
+                padding: 8px;
+                gap: 6px;
+            }
+
+            /* iOS 上输入框字号小于 16px 会触发自动放大 */
+            #message-input {
+                padding: 10px 12px;
+                font-size: 16px;
+                min-height: 44px;
+            }
+
+            .button-group {
+                gap: 6px;
+            }
+
+            .btn {
+                padding: 10px 12px;
+                font-size: 14px;
+                white-space: nowrap;
+            }
+        }
+
+        /* 超窄屏：按钮换行，避免挤压输入框 */
+        @media (max-width: 420px) {
+            .input-area {
+                flex-wrap: wrap;
+            }
+
+            #message-input {
+                flex-basis: 100%;
+            }
+
+            .button-group {
+                width: 100%;
+                justify-content: flex-end;
+                padding: 0 4px 2px;
+            }
+        }
+        /* 访问令牌输入层 */
+        .token-gate {
+            position: fixed;
+            inset: 0;
+            z-index: 1200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+
+        .token-card {
+            width: min(380px, 100%);
+            padding: 28px 24px;
+            border-radius: 16px;
+            background: #1f2740;
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+        }
+
+        .token-card h2 {
+            margin-bottom: 10px;
+            font-size: 18px;
+            color: #e6e9f2;
+        }
+
+        .token-card p {
+            margin-bottom: 18px;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #9aa4bf;
+            text-align: left;
+        }
+
+        #token-input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #33405f;
+            border-radius: 10px;
+            background: #16203a;
+            color: #e6e9f2;
+            font-size: 14px;
+            outline: none;
+        }
+
+        #token-input:focus {
+            border-color: #ff8c42;
+        }
+
+        .token-error {
+            min-height: 18px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: #ff6b6b;
+        }
+
+        .token-btn {
+            width: 100%;
+            margin-top: 6px;
+        }
+
+        /* 轻提示 */
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 88px;
+            z-index: 1100;
+            max-width: 80vw;
+            padding: 10px 18px;
+            border-radius: 999px;
+            background: rgba(20, 26, 44, 0.92);
+            color: #e6e9f2;
+            font-size: 13px;
+            text-align: center;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-50%) translateY(12px);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <!-- 启动动画 - 简洁橙色圆球 -->
+    <div class="splash-screen" id="splash-screen">
+        <div class="circle" id="circle"></div>
+        <div class="welcome-text">我是坤坤，您的旅游管家</div>
+    </div>
+    
+    <!-- 访问令牌输入层：服务器启用 ACCESS_TOKEN 且本地没存令牌时才会显示 -->
+    <div class="token-gate" id="token-gate" style="display: none;">
+        <div class="token-card">
+            <h2>需要访问令牌</h2>
+            <p>这台服务器开启了访问保护，请输入部署时设置的 ACCESS_TOKEN。令牌只保存在本机浏览器里。</p>
+            <input id="token-input" type="password" placeholder="ACCESS_TOKEN" autocomplete="current-password">
+            <div class="token-error" id="token-error"></div>
+            <button class="btn token-btn" id="token-submit" type="button">进入</button>
+        </div>
+    </div>
+
+    <!-- 主聊天界面 -->
+    <div class="container" id="main-container" style="display: none;">
+        <div class="header">
+            <h1>坤坤 - 旅游管家</h1>
+            <p>智能对话 · 地图服务 · 旅行助手</p>
+        </div>
+        
+        <div class="chat-container" id="chat-container">
+            <div class="ai-message message" id="welcome-message"></div>
+        </div>
+        
+        <div class="input-area">
+            <textarea id="message-input" placeholder="请问需要什么帮助？..." rows="1"></textarea>
+            <div class="button-group">
+                <button id="clear-button" class="btn" type="button">清空</button>
+                <button id="save-button" class="btn" type="button">保存记录</button>
+                <button id="send-button" class="btn" type="button">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 轻提示，替代 alert -->
+    <div class="toast" id="toast"></div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

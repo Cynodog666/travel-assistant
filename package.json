@@ -1,12 +1,13 @@
 {
   "name": "travel-assistant",
-  "version": "2.0.0",
-  "description": "对话式旅行规划助手：基于 Function Calling 的 Agent + 高德地图工具集 + SSE 流式输出",
+  "version": "2.1.0",
+  "description": "对话式旅行规划助手：基于 Function Calling 的 Agent + 高德地图工具集 + SSE 流式输出，含访问令牌、限流与安全边界",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js",
+    "gen-token": "node -e \"console.log(require('crypto').randomBytes(24).toString('base64url'))\""
   },
   "keywords": [
     "agent",
