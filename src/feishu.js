@@ -33,7 +33,14 @@ const MAX_FIRST_LEVEL_PER_CHUNK = 50;
 /** 飞书常见错误码 → 能直接照做的提示 */
 function explainFeishuError(code, msg) {
   if (code === 99991400) return `飞书接口被限流了（${msg || '频率超限'}），稍后重试`;
-  if (code === 1770040 || code === 1770032 || code === 1770032) {
+  if (code === 21001) {
+    return (
+      '飞书返回 21001（Access denied due to platform policy）：应用还没真正生效。' +
+      '检查「版本管理与发布」里版本是否为已发布/已上线、企业管理员是否已启用该应用、' +
+      '应用「安全设置」里的 IP 白名单是否漏了服务器出口 IP'
+    );
+  }
+  if (code === 1770040 || code === 1770032) {
     return `没有云文档权限（${msg}）：检查应用是否开通 docx:document / drive:drive，并把应用加进目标文件夹的协作者`;
   }
   if (code === 1770039) return `文件夹不存在（${msg}）：检查 FEISHU_FOLDER_TOKEN 是否填错`;

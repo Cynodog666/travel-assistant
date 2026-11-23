@@ -223,6 +223,25 @@ FEISHU_LINK_SHARE=anyone_readable
 两个都失败也不影响文档已经建好，返回结果里会带 `shareError` 说明原因。授权那步报权限错误，
 通常是缺「云文档权限」这个 scope，回第 3 步补上再发布一次版本。
 
+### 自检与排障
+
+配好之后先跑一次自检，比自己猜快得多：
+
+```bash
+npm run check:feishu
+```
+
+它会按「取 token → 建文档 → Markdown 转 block → 批量插入 → 分享」一步步跑，哪步失败就说哪步。
+它会在你的飞书里建一篇标题带「可删除」的测试文档，验完可以直接删。
+
+| 现象 | 原因 |
+|---|---|
+| `21001 Access denied due to platform policy` | 应用还没生效。按顺序查：① 「版本管理与发布」里版本是不是**已发布/已上线**（只存草稿或审核中都会报这个）；② 企业版要管理员在 `admin.feishu.cn` 审核并**启用**应用；③ 「安全设置」里如果开了 IP 白名单，漏了服务器出口 IP；④ 确认是「企业自建应用」而不是商店/网页应用 |
+| `1770040 / 1770032` | 缺云文档权限，或应用没被加进目标文件夹的协作者 |
+| `1770006 schema mismatch` | block 里带了只读字段（`merge_info` 等），或父子关系不对——本仓库已处理，出现说明被改坏了 |
+| 文档建成功但打不开 | 没设 `FEISHU_LINK_SHARE` 也没设 `FEISHU_SHARE_TO`，文档只在应用名下 |
+| 链接里是 `yourname` | `FEISHU_WEB_ORIGIN` 还是示例值，换成你自己的租户域名（浏览器地址栏里那串） |
+
 ### 实现上的几个细节
 
 - 走官方三段式：**建空文档 → `blocks/convert` 把 Markdown 转 block → `descendant` 批量插入**。
