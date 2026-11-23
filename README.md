@@ -273,6 +273,26 @@ TRIPMATCH_API_KEY=你的key
 TRIPMATCH_TOOL_ALLOW=flight,train,transfer
 ```
 
+### 接进来之后是什么样
+
+飞常准服务端一共给 9 个工具，本仓库默认只注册其中 8 个：
+
+| 工具 | 用途 | 默认注册 |
+|---|---|---|
+| `searchTrainTickets` | 火车票余票/票价 | ✅ |
+| `searchTrainStations` | 车站查询 | ✅ |
+| `searchFlightsByDepArr` | 按城市/机场查航班 | ✅ |
+| `searchFlightsByNumber` | 按航班号查 | ✅ |
+| `getFlightPriceByCities` | 城市间机票价格 | ✅ |
+| `getFlightAndTrainTransferInfo` | 空铁联运中转方案 | ✅ |
+| `flightHappinessIndex` | 航班准点/舒适度对比 | ✅ |
+| `getTodayDate` | 取今天日期 | ✅（工具描述明确要求"查日期必须调它，别自己编"） |
+| `getFutureWeatherByAirport` | 机场天气 | ❌ 故意不注册：和自家的 `weather`（和风）重复，两个天气工具会让模型选错数据源 |
+
+实测一轮「下周五合肥去北京，对比高铁和飞机，预算 800」会依次用到
+`getTodayDate` → `searchTrainTickets` → `searchFlightsByDepArr` → `getFlightPriceByCities` → `weather`，
+最后给出含车次/航班/票价/税费/余票的对比表——这些数字全部来自真实接口，没有一个靠模型编。
+
 ### 为什么手写客户端而不用 SDK
 
 `src/mcp-client.js` 只做三件事：握手、列工具、调工具。协议是 JSON-RPC 2.0 上的一层薄壳，
