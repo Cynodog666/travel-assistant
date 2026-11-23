@@ -25,8 +25,10 @@ const cors = require('cors');
 const os = require('os');
 const crypto = require('crypto');
 
-const { loadConfig, ConfigError, PUBLIC_DIR } = require('./src/config');
-const { AmapClient } = require('./src/amap');
+const { loadConfig, ConfigError, weatherProviderOf, PUBLIC_DIR } = require('./src/config');
+const { AmapClient, TOOLS } = require('./src/amap');
+const { QWeatherClient, WEATHER_TOOL } = require('./src/qweather');
+const { ToolRegistry } = require('./src/tool-registry');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
@@ -36,6 +38,35 @@ const MAX_MESSAGE_LENGTH = 4000;
 
 const generateSessionId = () => crypto.randomUUID();
 
+/**
+ * 组装工具：高德固定三个（地理编码 / POI / 路线），
+ * weather 则按配置二选一——和风优先，没有 key 就用高德自带的实时天气。
+ */
+function createToolRegistry(config, amap, qweather) {
+  const registry = new ToolRegistry();
+  const amapToolNames = ['geocode', 'poi_search', 'route_planning'];
+  const useQWeather = weatherProviderOf(config) === 'qweather';
+  if (!useQWeather) amapToolNames.push('weather');
+
+  for (const name of amapToolNames) {
+    const schema = TOOLS.find((tool) => tool.function.name === name);
+    if (!schema) throw new Error(`缺少高德工具定义：${name}`);
+    registry.register({
+      schema,
+      handler: (args, options) => amap.run(name, args, options),
+    });
+  }
+
+  if (useQWeather) {
+    registry.register({
+      schema: WEATHER_TOOL,
+      handler: (args, options) => qweather.run('weather', args, options),
+    });
+  }
+
+  return registry;
+}
+
 function createDeps(config) {
   const amap = new AmapClient({
     key: config.amapKey,
@@ -43,17 +74,27 @@ function createDeps(config) {
     cacheSize: config.amapCacheSize,
     timeoutMs: config.amapTimeoutMs,
   });
-  const agent = new Agent({ config, amap });
+
+  const qweather = config.qweatherApiKey
+    ? new QWeatherClient({
+        apiKey: config.qweatherApiKey,
+        baseUrl: config.qweatherBaseUrl,
+        timeoutMs: config.qweatherTimeoutMs,
+      })
+    : null;
+
+  const registry = createToolRegistry(config, amap, qweather);
+  const agent = new Agent({ config, registry });
   const sessions = new SessionStore({
     maxSessions: config.maxSessions,
     maxHistoryTurns: config.maxHistoryTurns,
     ttlMs: config.sessionTtlMs,
   });
-  return { amap, agent, sessions };
+  return { amap, qweather, registry, agent, sessions };
 }
 
 function createApp(config, deps = createDeps(config)) {
-  const { amap, agent, sessions } = deps;
+  const { amap, registry, agent, sessions } = deps;
   const app = express();
 
   app.disable('x-powered-by');
@@ -113,6 +154,8 @@ function createApp(config, deps = createDeps(config)) {
       sessions: sessions.size,
       cache: amap.cache.size,
       model: config.aiModel,
+      weatherProvider: weatherProviderOf(config),
+      tools: registry.names(),
       // 前端用它决定要不要弹令牌输入层；不涉及任何密钥内容
       authRequired: Boolean(config.accessToken),
     });
@@ -300,6 +343,8 @@ function main() {
   const server = app.listen(config.port, () => {
     console.log('');
     console.log(`服务器已启动，模型: ${config.aiModel}`);
+    console.log(`天气数据: ${weatherProviderOf(config) === 'qweather' ? '和风天气（实时 + 预报 + 预警）' : '高德（仅实时）'}`);
+    console.log(`工具: ${deps.registry.names().join(', ')}`);
     console.log(`访问令牌: ${config.accessToken ? '已启用' : '未启用（本机自用可忽略）'}`);
     console.log(`限流: ${config.rateLimitMax} 次 / ${Math.round(config.rateLimitWindowMs / 1000)} 秒 / IP`);
     console.log(`本机访问:   http://localhost:${config.port}/index.html`);

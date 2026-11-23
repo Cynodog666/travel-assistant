@@ -64,11 +64,20 @@
       .replace(/"/g, '&quot;');
   }
 
-  // 极简 Markdown：粗体 + 列表符号，换行交给 CSS 的 pre-wrap
+  // 极简 Markdown：粗体 + 列表符号，换行交给 CSS 的 pre-wrap。
+  // 另外把裸链接变成可点的 <a>：路线工具会返回 amapuri:// 深链和 H5 链接，
+  // 不 linkify 的话在手机上也点不动。
   function renderMarkdown(text) {
     let html = escapeHtml(text);
     html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/^[ \t]*[-*•][ \t]+/gm, '• ');
+    html = html.replace(
+      /(amapuri:\/\/[^\s<"）)]+|https?:\/\/[^\s<"）)]+)/g,
+      (url) =>
+        '<a class="inline-link" href="' + url + '" target="_blank" rel="noopener noreferrer">' +
+        (url.length > 56 ? url.slice(0, 56) + '…' : url) +
+        '</a>'
+    );
     return html;
   }
 

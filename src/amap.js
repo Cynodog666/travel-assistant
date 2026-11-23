@@ -9,6 +9,7 @@
 
 const axios = require('axios');
 const { LRUCache } = require('./lru-cache');
+const { buildNavigationLinks } = require('./amap-uri');
 
 const AMAP_HOST = 'https://restapi.amap.com';
 
@@ -193,11 +194,22 @@ class AmapClient {
         const route = data.route;
         const path = route && route.paths && route.paths[0];
         if (!path) return { message: '没有规划出可用路线，可能是起终点太近或地址无法解析' };
+
+        // 顺手给两个可直接点开的链接：H5 页面 + 唤起高德 App 的深链
+        const navigation = buildNavigationLinks({
+          origin: origin.location,
+          destination: destination.location,
+          originName: origin.formatted || input.origin,
+          destinationName: destination.formatted || input.destination,
+          mode,
+        });
+
         return {
           mode: mode === 'walking' ? '步行' : '驾车',
           distanceKm: Number((Number(path.distance) / 1000).toFixed(2)),
           durationMin: Math.round(Number(path.duration) / 60),
           steps: (path.steps || []).slice(0, 10).map((s) => s.instruction),
+          navigation,
         };
       }
 

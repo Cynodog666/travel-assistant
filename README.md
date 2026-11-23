@@ -23,7 +23,8 @@
 | 地址解析 | 中文地址 → 经纬度 + 行政区划编码 |
 | 地点检索 | 按关键词搜酒店 / 餐厅 / 景点，返回名称、地址、坐标、电话 |
 | 路线规划 | 两地点之间的驾车 / 步行路线，含距离、耗时、分段指引 |
-| 实时天气 | 按城市查询当前天气、温度、风力、湿度 |
+| 实时天气 | 按城市查询当前天气、温度、风力、湿度；配了和风后升级为「实时 + 逐日预报 + 气象预警」 |
+| 一键导航 | 路线规划结果自带高德深链（`amapuri://`）和 H5 链接，点一下直接开始导航 |
 | 多轮对话 | 基于 sessionId 隔离会话，自动裁剪上下文控制 token，闲置超时自动回收 |
 | 流式输出 | SSE 逐 token 推送，前端打字机效果 |
 | 接口缓存 | 高德请求走 LRU 缓存，重复查询不打外部接口 |
@@ -89,6 +90,9 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 │   ├── config.js        环境变量集中读取与校验
 │   ├── agent.js         Agent 循环 + 流式 tool_calls 归并 + 中断/超时
 │   ├── amap.js          高德四类工具与缓存
+│   ├── amap-uri.js      高德 URI：把路线变成可点击的导航链接
+│   ├── qweather.js      和风天气：实时 / 预报 / 预警（可选，按配置替换高德天气）
+│   ├── tool-registry.js 工具注册表：schema 与 handler 的映射
 │   ├── session.js       会话存储：裁剪、TTL、容量淘汰
 │   ├── security.js      令牌校验 + 限流
 │   └── lru-cache.js     LRU 缓存
@@ -101,6 +105,51 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 
 **重要**：`express.static` 只指向 `public/`。以前它指向项目根目录，`/server.js`、`/package.json`、
 旧备份目录里的源码都能被直接下载，其中还躺着一把明文密钥——这个坑下面还会再提一次。
+
+---
+
+## 工具与天气实现
+
+交给模型的工具由 `src/tool-registry.js` 组装，**同名工具只允许有一个**，避免模型在两个都能
+"查天气"的工具之间摇骰子：
+
+| 工具 | 来源 | 说明 |
+|---|---|---|
+| `geocode` | 高德 | 地址 → 经纬度 + adcode |
+| `poi_search` | 高德 | 关键词搜地点 |
+| `route_planning` | 高德 | 路线 + **导航链接**（appLink / webLink） |
+| `weather` | 和风 **或** 高德 | 配了 `QWEATHER_API_KEY` + `QWEATHER_BASE_URL` 就和风，否则退回高德实时值 |
+
+和风那条路是这样走的（v1 接口，和高德那套"城市名直接查"不同）：
+
+```
+城市名 ──/geo/v2/city/lookup──► 经纬度 + LocationID
+                                     │
+        ┌────────────────────────────┼────────────────────────────┐
+        ▼                            ▼                            ▼
+  /weather/v1/current      /weather/v1/daily          /weatheralert/v1/current
+  实时（温度/体感/风/UV）    逐日预报（1-10 天）          正在生效的气象预警
+```
+
+几个实现上的选择：
+
+- **实时数据必须成功，预报和预警允许失败**。预报挂了只记 `forecastError`，预警挂了记
+  `alertsError`，别让一个次要接口把整个天气查询变成报错。
+- **字段做了裁剪和单位统一**（℃ / % / mm），原始响应字段太多，直接塞给模型既费 token
+  又容易读错。
+- **鉴权走 `X-QW-Api-Key` 头**，不用 JWT——和风两种方式不能混用，API KEY 更简单。
+  注意 2027 年起和风会对 API KEY 的每日请求量做限制，届时再换 JWT（Ed25519 签名）。
+- **只用和风自己的经纬度**，不把高德的 GCJ-02 坐标传过去，省掉坐标系偏移那一堆事。
+
+`route_planning` 返回的链接长这样（`t=0` 驾车、`t=1` 公交、`t=2` 步行、`t=3` 骑行）：
+
+```
+appLink: amapuri://route/plan/?slat=39.909&slon=116.397&sname=天安门&...
+webLink: https://uri.amap.com/navigation?from=116.397,39.909,天安门&to=...&mode=car
+```
+
+`appLink` 只有装了高德 App 的手机能唤醒，`webLink` 是万能的 H5 兜底，所以两个都给。
+前端 `renderMarkdown` 会把裸链接转成可点的 `<a>`，否则手机上根本点不动。
 
 ---
 
@@ -280,6 +329,9 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `AMAP_BASE_URL` | 否 | `https://restapi.amap.com` | 走代理或测试时改这里 |
 | `AMAP_TIMEOUT_MS` | 否 | `8000` | 高德接口超时 |
 | `AMAP_CACHE_SIZE` | 否 | `200` | 高德接口缓存条数 |
+| `QWEATHER_API_KEY` | 否 | — | 和风天气 API Key；不填就用高德自带的实时天气 |
+| `QWEATHER_BASE_URL` | 配和风时必填 | — | 控制台给的专属 API Host，如 `https://abc.re.qweatherapi.com` |
+| `QWEATHER_TIMEOUT_MS` | 否 | `8000` | 和风接口超时 |
 | `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
 | `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
 | `RATE_LIMIT_MAX` | 否 | `20` | 每 IP 每窗口最大请求数 |
@@ -298,7 +350,7 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `POST` | `/api/chat` | 是 | 非流式，返回 `{ reply, sessionId }` |
 | `POST` | `/api/chat/stream` | 是 | SSE 流式，事件类型见下 |
 | `POST` | `/api/clear-history` | 是 | 清空**指定**会话，`sessionId` 必填 |
-| `GET` | `/api/health` | 否 | 健康检查：会话数、缓存条目数、是否需要令牌 |
+| `GET` | `/api/health` | 否 | 健康检查：会话数、缓存条目数、天气实现、工具列表、是否需要令牌 |
 
 旧的 `/chat`、`/chat/stream`、`/clear-history` 仍然可用（同一套处理器），方便老脚本无痛迁移。
 
@@ -353,28 +405,34 @@ event: error     data: {"message":"错误原因"}
 npm test
 ```
 
-分两层，**不需要真实模型 key、高德 key 或外网**，可以放进 CI：
+分两层，**不需要真实模型 key、地图/天气 key 和外网**，可以放进 CI：
 
 1. **单元测试**：LRU 淘汰顺序、会话裁剪（保证 system 保留且消息成对）、限流命中与拒绝、
-   令牌定长比较、缺密钥时配置校验抛错；
-2. **端到端**：起一个假模型服务（模拟 `tool_calls` 分片）+ 一个假高德服务（通过 `AMAP_BASE_URL`
-   指过去），启动真实 `server.js`，然后断言：
+   令牌定长比较、缺密钥/缺 API Host 时的配置校验、工具注册表（重名拒绝、按名分发、未知工具）、
+   导航链接生成（经纬度、`t=0/t=2`、中文名编码）、高德 `weather` 与带导航的 `route_planning`、
+   和风天气的字段整形与「预警接口失败时降级」；
+2. **端到端**：起一个假模型服务（模拟 `tool_calls` 分片）+ 一个假和风天气服务（通过
+   `QWEATHER_BASE_URL` 指过去），启动真实 `server.js`，然后断言：
    - 静态目录里拿不到 `server.js`、`.env`、备份目录；
    - 无令牌 401、错令牌 403、非法 sessionId 400；
    - SSE 事件序列 `session → delta… → done`、文本拼装完整；
    - `tool_calls.function.name` 和 `arguments` 都按 index 正确归并；
-   - 工具结果带正确的 `tool_call_id` 回填，且确实走了高德链路；
+   - 工具结果带正确的 `tool_call_id` 回填，且确实走了和风链路（带回预报与预警）；
+   - 发给模型的工具列表里**只有一个 weather**，且已切换成和风版本；
    - 清空指定会话只影响那一个会话。
 
 ```
-  PASS  LRU 按最近使用淘汰
-  PASS  会话裁剪保留 system 且不超过上限
+  PASS  会话裁剪保留 system 且消息成对
+  PASS  只填和风 key 不填 API Host 时报错并给出提示
+  PASS  导航链接：深链是 amapuri:// 且带经纬度
+  PASS  高德 route_planning：结果里带可点击的导航链接
+  PASS  和风 weather：温度四舍五入、湿度转百分比  → 22.4℃ / 69%
+  PASS  和风 weather：预警接口失败时降级但保留实时数据
   PASS  静态目录只暴露 public（源码/密钥/备份均 404）
-  PASS  无令牌访问接口被拒（401）
-  PASS  tool_calls.arguments 按 index 正确归并  → {"city":"长沙"}
+  PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：29 通过 / 0 失败
+结果：48 通过 / 0 失败
 ```
 
 ---
@@ -394,6 +452,11 @@ npm test
 7. **清空按钮会误伤别人**：见「清空语义」一节。
 8. **用户关页面后上游还在跑**：SSE 写不回去也不会报错，模型调用和高德请求照常烧钱。
    现在用 `res.on('close')` + `AbortController` 一路传到 `fetch` 和 `axios`。
+9. **和风天气换了两套接口**：网上教程大多是旧的 `devapi.qweather.com + key 参数 + 城市名`，
+   现在必须是「控制台分配的专属 API Host + `X-QW-Api-Key` 头 + 先做城市搜索拿经纬度」。
+   照着老教程写会一直 401，而且 API KEY 和 JWT 两种鉴权不能混着用。
+10. **`URLSearchParams` 会把空格编成 `+`**：地图 URI 的参数是普通查询串，`+` 不会被解成空格，
+    起名带空格的地点就会定位失败。这里改用 `encodeURIComponent` 手动拼。
 
 ---
 
@@ -403,6 +466,8 @@ npm test
 - [x] 访问令牌 + 限流 + 静态目录白名单
 - [x] 客户端断开即中断上游
 - [x] 会话按 id 清空、闲置会话自动回收
+- [x] 和风天气（实时 + 预报 + 预警）与高德实时天气的按配置切换
+- [x] 路线结果带一键导航链接（`amapuri://` + H5 兜底）
 - [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
 - [ ] 工具结果加上结构化展示（地图卡片、路线图）
 - [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）

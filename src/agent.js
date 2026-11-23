@@ -10,7 +10,7 @@
  *      还会往已经关闭的响应里写数据。
  */
 
-const { TOOLS } = require('./amap');
+/* Agent 只依赖工具注册表，不关心工具背后是高德还是和风。 */
 
 class AgentAbortError extends Error {
   constructor(message = '请求已取消', { timedOut = false } = {}) {
@@ -49,14 +49,13 @@ function createRoundSignal(externalSignal, timeoutMs) {
 }
 
 class Agent {
-  constructor({ config, amap, fetchImpl = globalThis.fetch, tools = TOOLS }) {
+  constructor({ config, registry, fetchImpl = globalThis.fetch }) {
     if (typeof fetchImpl !== 'function') {
       throw new Error('当前 Node 没有全局 fetch，请升级到 Node 18+');
     }
     this.config = config;
-    this.amap = amap;
+    this.registry = registry;
     this.fetchImpl = fetchImpl;
-    this.tools = tools;
   }
 
   /**
@@ -75,7 +74,7 @@ class Agent {
         body: JSON.stringify({
           model: this.config.aiModel,
           messages,
-          tools: this.tools,
+          tools: this.registry.tools,
           tool_choice: 'auto',
           temperature: this.config.aiTemperature,
           stream: true,
@@ -223,7 +222,7 @@ class Agent {
 
           let toolResult;
           try {
-            toolResult = await this.amap.run(call.function.name, args, { signal });
+            toolResult = await this.registry.run(call.function.name, args, { signal });
           } catch (error) {
             if (error instanceof AgentAbortError) throw error;
             if (signal && signal.aborted) throw new AgentAbortError();

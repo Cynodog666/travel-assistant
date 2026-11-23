@@ -57,6 +57,12 @@ function loadConfig(env = process.env) {
     amapTimeoutMs: toInt('AMAP_TIMEOUT_MS', env.AMAP_TIMEOUT_MS, 8_000, { min: 1_000, max: 60_000 }),
     amapCacheSize: toInt('AMAP_CACHE_SIZE', env.AMAP_CACHE_SIZE, 200, { min: 1, max: 10_000 }),
 
+    // 和风天气：可选。配了就用「实时 + 预报 + 预警」替换高德那个只有实时值的 weather 工具。
+    // 注意它必须配控制台分配的专属 API Host，不是固定域名。
+    qweatherApiKey: (env.QWEATHER_API_KEY || '').trim(),
+    qweatherBaseUrl: (env.QWEATHER_BASE_URL || '').trim().replace(/\/+$/, ''),
+    qweatherTimeoutMs: toInt('QWEATHER_TIMEOUT_MS', env.QWEATHER_TIMEOUT_MS, 8_000, { min: 1_000, max: 60_000 }),
+
     maxToolSteps: toInt('MAX_TOOL_STEPS', env.MAX_TOOL_STEPS, 5, { min: 1, max: 20 }),
     maxHistoryTurns: toInt('MAX_HISTORY_TURNS', env.MAX_HISTORY_TURNS, 20, { min: 1, max: 200 }),
     maxSessions: toInt('MAX_SESSIONS', env.MAX_SESSIONS, 500, { min: 1, max: 100_000 }),
@@ -83,7 +89,23 @@ function loadConfig(env = process.env) {
     );
   }
 
+  if (config.qweatherApiKey && !config.qweatherBaseUrl) {
+    throw new ConfigError(
+      [
+        '设置了 QWEATHER_API_KEY 但没有设置 QWEATHER_BASE_URL。',
+        '  和风天气的接口地址是每个项目独立的（控制台「设置 → API Host」），形如：',
+        '    QWEATHER_BASE_URL=https://abcdefg.re.qweatherapi.com',
+        '  想先用高德自带的实时天气，把 QWEATHER_API_KEY 留空即可。',
+      ].join('\n')
+    );
+  }
+
   return config;
 }
 
-module.exports = { loadConfig, ConfigError, ROOT_DIR, PUBLIC_DIR };
+/** 天气能力用哪套实现：配了和风就走和风，否则退回高德。 */
+function weatherProviderOf(config) {
+  return config.qweatherApiKey && config.qweatherBaseUrl ? 'qweather' : 'amap';
+}
+
+module.exports = { loadConfig, ConfigError, weatherProviderOf, ROOT_DIR, PUBLIC_DIR };
