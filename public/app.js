@@ -78,6 +78,14 @@
         (url.length > 56 ? url.slice(0, 56) + '…' : url) +
         '</a>'
     );
+
+    // 地图图片：map_image 工具返回的是 /api/staticmap?...&sig=... 这种相对地址，
+    // 上面 linkify 的正则只认 http(s)/amapuri，不会误伤它。
+    html = html.replace(
+      /!\[([^\]]*)\]\(([^)\s]+)\)/g,
+      (match, alt, src) => '<img class="chat-map" src="' + src + '" alt="' + alt + '" loading="lazy">'
+    );
+
     return html;
   }
 

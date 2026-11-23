@@ -68,6 +68,10 @@ function loadConfig(env = process.env) {
     maxSessions: toInt('MAX_SESSIONS', env.MAX_SESSIONS, 500, { min: 1, max: 100_000 }),
     sessionTtlMs: toInt('SESSION_TTL_MS', env.SESSION_TTL_MS, 2 * 60 * 60 * 1000, { min: 60_000 }),
 
+    // 静态地图签名密钥：留空则退化为「ACCESS_TOKEN 或 AMAP_KEY」，
+    // 想单独轮换图片链接的有效性时再设置它。
+    staticMapSecret: (env.STATICMAP_SECRET || '').trim(),
+
     // 访问令牌：留空表示不鉴权（只适合本机），上公网必须设置。
     accessToken: (env.ACCESS_TOKEN || '').trim(),
     trustProxy: toBool(env.TRUST_PROXY, false),

@@ -29,6 +29,7 @@ const { loadConfig, ConfigError, weatherProviderOf, PUBLIC_DIR } = require('./sr
 const { AmapClient, TOOLS } = require('./src/amap');
 const { QWeatherClient, WEATHER_TOOL } = require('./src/qweather');
 const { ToolRegistry } = require('./src/tool-registry');
+const { createStaticMapService, createMapImageTool, STATICMAP_PATH } = require('./src/static-map');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
@@ -42,7 +43,7 @@ const generateSessionId = () => crypto.randomUUID();
  * 组装工具：高德固定三个（地理编码 / POI / 路线），
  * weather 则按配置二选一——和风优先，没有 key 就用高德自带的实时天气。
  */
-function createToolRegistry(config, amap, qweather) {
+function createToolRegistry(config, amap, qweather, mapImage) {
   const registry = new ToolRegistry();
   const amapToolNames = ['geocode', 'poi_search', 'route_planning'];
   const useQWeather = weatherProviderOf(config) === 'qweather';
@@ -64,6 +65,10 @@ function createToolRegistry(config, amap, qweather) {
     });
   }
 
+  if (mapImage) {
+    registry.register({ schema: mapImage.schema, handler: mapImage.handler });
+  }
+
   return registry;
 }
 
@@ -83,18 +88,23 @@ function createDeps(config) {
       })
     : null;
 
-  const registry = createToolRegistry(config, amap, qweather);
+  // 静态图的签名密钥：优先用专门的配置，否则退化到已有的两个密钥之一
+  const staticMapSecret = config.staticMapSecret || config.accessToken || config.amapKey;
+  const staticMap = createStaticMapService({ amap, secret: staticMapSecret });
+  const mapImage = createMapImageTool({ amap, service: staticMap });
+
+  const registry = createToolRegistry(config, amap, qweather, mapImage);
   const agent = new Agent({ config, registry });
   const sessions = new SessionStore({
     maxSessions: config.maxSessions,
     maxHistoryTurns: config.maxHistoryTurns,
     ttlMs: config.sessionTtlMs,
   });
-  return { amap, qweather, registry, agent, sessions };
+  return { amap, qweather, mapImage, staticMap, registry, agent, sessions };
 }
 
 function createApp(config, deps = createDeps(config)) {
-  const { amap, registry, agent, sessions } = deps;
+  const { amap, registry, agent, sessions, staticMap } = deps;
   const app = express();
 
   app.disable('x-powered-by');
@@ -185,6 +195,38 @@ function createApp(config, deps = createDeps(config)) {
   }
 
   const chatMiddleware = [authGuard, rateLimit].filter(Boolean);
+
+  // ---------------------------------------------------------------------
+  // 静态地图代理：<img> 请求带不了 Authorization 头，所以用 HMAC 签名兜住，
+  // 同时保证高德的 key 永远不出服务端。
+  // ---------------------------------------------------------------------
+  app.get([STATICMAP_PATH, '/staticmap'], rateLimit, async (req, res) => {
+    const verdict = staticMap.signer.verify(req.query);
+    if (!verdict.ok) {
+      res.status(403).json({ error: verdict.reason });
+      return;
+    }
+
+    const location = String(req.query.location || '');
+    if (!location) {
+      res.status(400).json({ error: '缺少 location' });
+      return;
+    }
+
+    const zoom = Math.min(17, Math.max(10, Number(req.query.zoom) || 14));
+    const size = /^\d{2,4}\*\d{2,4}$/.test(String(req.query.size || '')) ? String(req.query.size) : '600*360';
+    const markers = req.query.markers ? String(req.query.markers) : undefined;
+
+    try {
+      const image = await staticMap.fetchImage({ location, zoom, size, scale: 1, markers });
+      res.setHeader('Content-Type', image.contentType);
+      res.setHeader('Cache-Control', 'private, max-age=600');
+      if (!res.writableEnded) res.send(image.buffer);
+    } catch (error) {
+      console.error('[staticmap] 失败：', error.message);
+      if (!res.headersSent) res.status(502).json({ error: error.message });
+    }
+  });
 
   // ---------------------------------------------------------------------
   // 非流式接口：脚本调试和降级路径

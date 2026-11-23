@@ -25,6 +25,7 @@
 | 路线规划 | 两地点之间的驾车 / 步行路线，含距离、耗时、分段指引 |
 | 实时天气 | 按城市查询当前天气、温度、风力、湿度；配了和风后升级为「实时 + 逐日预报 + 气象预警」 |
 | 一键导航 | 路线规划结果自带高德深链（`amapuri://`）和 H5 链接，点一下直接开始导航 |
+| 地图配图 | `map_image` 工具生成静态地图，回答里直接出图（高德 key 不出服务端） |
 | 多轮对话 | 基于 sessionId 隔离会话，自动裁剪上下文控制 token，闲置超时自动回收 |
 | 流式输出 | SSE 逐 token 推送，前端打字机效果 |
 | 接口缓存 | 高德请求走 LRU 缓存，重复查询不打外部接口 |
@@ -92,6 +93,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 │   ├── amap.js          高德四类工具与缓存
 │   ├── amap-uri.js      高德 URI：把路线变成可点击的导航链接
 │   ├── qweather.js      和风天气：实时 / 预报 / 预警（可选，按配置替换高德天气）
+│   ├── static-map.js    静态地图：签名 URL + 服务端代理取图
 │   ├── tool-registry.js 工具注册表：schema 与 handler 的映射
 │   ├── session.js       会话存储：裁剪、TTL、容量淘汰
 │   ├── security.js      令牌校验 + 限流
@@ -119,6 +121,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 | `poi_search` | 高德 | 关键词搜地点 |
 | `route_planning` | 高德 | 路线 + **导航链接**（appLink / webLink） |
 | `weather` | 和风 **或** 高德 | 配了 `QWEATHER_API_KEY` + `QWEATHER_BASE_URL` 就和风，否则退回高德实时值 |
+| `map_image` | 高德 | 地点或坐标 → 静态地图 PNG，返回 markdown 图片，前端直接渲染 |
 
 和风那条路是这样走的（v1 接口，和高德那套"城市名直接查"不同）：
 
@@ -150,6 +153,30 @@ webLink: https://uri.amap.com/navigation?from=116.397,39.909,天安门&to=...&mo
 
 `appLink` 只有装了高德 App 的手机能唤醒，`webLink` 是万能的 H5 兜底，所以两个都给。
 前端 `renderMarkdown` 会把裸链接转成可点的 `<a>`，否则手机上根本点不动。
+
+### 静态地图为什么走签名代理
+
+高德静态图接口的 URL 里带 `key`。如果把原始 URL 直接返回给前端，key 就白纸黑字躺在
+页面源码和聊天记录里了——这和之前"静态目录泄露源码"是同一类错误，只是更隐蔽。
+
+所以流程改成：
+
+```
+map_image 工具 ──► 服务端用 HMAC 签一个 /api/staticmap?location=...&exp=...&sig=...
+                            │
+浏览器 <img src=...> ───────┘   （img 请求带不了 Authorization 头，签名就代替了它）
+                            ▼
+                  校验 sig + exp → 带着 key 去高德取图 → 直接把 PNG 流回去
+```
+
+几个细节：
+
+- 签名串是「排序后的查询参数 + exp」，`exp` 和 `sig` 本身不参与计算，否则校验时会把 `exp` 拼两遍。
+- 参数只要被改一个字节（比如把 `zoom` 从 14 改成 15），签名就对不上 → 403。所以服务端可以放心
+  信任这些参数，不需要再做一堆入参校验。
+- 有效期默认 1 小时。注意：**导出的 .html 行程单里如果嵌了地图，1 小时后图会失效**，
+  要长期保存需要在导出时把图片转成 base64 内联。
+- 400/500 时高德返回的是 JSON 而不是图片，代理会识别出来转成 502，而不是把一段 JSON 当 PNG 吐给浏览器。
 
 ---
 
@@ -332,6 +359,7 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `QWEATHER_API_KEY` | 否 | — | 和风天气 API Key；不填就用高德自带的实时天气 |
 | `QWEATHER_BASE_URL` | 配和风时必填 | — | 控制台「设置」里分给你的 API Host，前面补 `https://`（别照抄文档里的示例地址） |
 | `QWEATHER_TIMEOUT_MS` | 否 | `8000` | 和风接口超时 |
+| `STATICMAP_SECRET` | 否 | 复用 `ACCESS_TOKEN` / `AMAP_KEY` | 静态图链接的签名密钥，想单独轮换时设置 |
 | `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
 | `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
 | `RATE_LIMIT_MAX` | 否 | `20` | 每 IP 每窗口最大请求数 |
@@ -351,6 +379,7 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `POST` | `/api/chat/stream` | 是 | SSE 流式，事件类型见下 |
 | `POST` | `/api/clear-history` | 是 | 清空**指定**会话，`sessionId` 必填 |
 | `GET` | `/api/health` | 否 | 健康检查：会话数、缓存条目数、天气实现、工具列表、是否需要令牌 |
+| `GET` | `/api/staticmap` | HMAC 签名 | 静态地图代理，给 `<img>` 用；参数被改或签名过期一律 403 |
 
 旧的 `/chat`、`/chat/stream`、`/clear-history` 仍然可用（同一套处理器），方便老脚本无痛迁移。
 
@@ -432,7 +461,7 @@ npm test
   PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：48 通过 / 0 失败
+结果：56 通过 / 0 失败
 ```
 
 ---
@@ -457,6 +486,10 @@ npm test
    照着老教程写会一直 401，而且 API KEY 和 JWT 两种鉴权不能混着用。
 10. **`URLSearchParams` 会把空格编成 `+`**：地图 URI 的参数是普通查询串，`+` 不会被解成空格，
     起名带空格的地点就会定位失败。这里改用 `encodeURIComponent` 手动拼。
+11. **静态图不能把带 key 的 URL 给前端**：改成 HMAC 签名 URL + 服务端代理取图，`<img>` 也因此
+    不需要带 Authorization 头。
+12. **签名里别把 `exp` 又拼一遍**：`sig = HMAC(排序参数 + exp)`，如果 `exp` 同时还留在排序参数里，
+    校验时就会变成 `exp` 出现两次，自己签的自己验不过——这次就是这么写出 bug 的，测试立刻抓到了。
 
 ---
 
@@ -468,6 +501,7 @@ npm test
 - [x] 会话按 id 清空、闲置会话自动回收
 - [x] 和风天气（实时 + 预报 + 预警）与高德实时天气的按配置切换
 - [x] 路线结果带一键导航链接（`amapuri://` + H5 兜底）
+- [x] 静态地图配图（签名 URL + 服务端代理，key 不出服务端）
 - [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
 - [ ] 工具结果加上结构化展示（地图卡片、路线图）
 - [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）

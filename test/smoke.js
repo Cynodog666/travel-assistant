@@ -558,6 +558,23 @@ function runUnitTests() {
       hostHint = error.message;
     }
     check('和风：域名解析失败时提示去核对 API Host', /API Host/.test(hostHint), hostHint.slice(0, 32));
+
+    // --- 静态地图：签名 ---
+    const { UrlSigner, buildAmapStaticMapUrl, looksLikeCoords } = require('../src/static-map');
+    const signer = new UrlSigner('test-secret', { ttlMs: 60_000 });
+    const signedPath = signer.sign({ location: '112.90,28.20', zoom: 14, size: '600*360' });
+    const signedQuery = Object.fromEntries(new URL('http://localhost' + signedPath).searchParams.entries());
+
+    check('静态图签名：自己签的地址能验过', signer.verify(signedQuery).ok, signedPath.slice(0, 28) + '…');
+    check('静态图签名：改掉参数就验不过', !signer.verify({ ...signedQuery, zoom: '15' }).ok);
+    check('静态图签名：过期后验不过', !signer.verify(signedQuery, Date.now() + 120_000).ok);
+
+    const keyProbe = 'SECRETKEY123';
+    check(
+      '静态图：签名地址里不含高德 key',
+      !signedPath.includes(keyProbe) && buildAmapStaticMapUrl({ key: keyProbe, location: '112.90,28.20' }).includes(keyProbe)
+    );
+    check('静态图：坐标和地址能区分开', looksLikeCoords('112.9,28.2') && !looksLikeCoords('长沙岳麓山'));
   })();
 }
 
@@ -574,10 +591,23 @@ async function runE2ETests() {
     health.ok === true && health.authRequired === true && health.weatherProvider === 'qweather'
   );
   check(
-    '工具列表里只有一个 weather',
-    Array.isArray(health.tools) && health.tools.filter((n) => n === 'weather').length === 1,
+    '工具列表：一个 weather + 一个 map_image',
+    Array.isArray(health.tools) &&
+      health.tools.filter((n) => n === 'weather').length === 1 &&
+      health.tools.includes('map_image'),
     (health.tools || []).join(',')
   );
+
+  // --- 静态图代理必须验签名 ---
+  const noSig = await fetch(`${baseUrl}/api/staticmap?location=112.90,28.20`);
+  await noSig.body?.cancel?.();
+  check('静态图代理：无签名被拒（403）', noSig.status === 403, `实际 ${noSig.status}`);
+
+  const forgedSig = await fetch(
+    `${baseUrl}/api/staticmap?location=112.90,28.20&exp=${Date.now() + 60_000}&sig=deadbeefdeadbeefdeadbeefdeadbeef`
+  );
+  await forgedSig.body?.cancel?.();
+  check('静态图代理：伪造签名被拒（403）', forgedSig.status === 403, `实际 ${forgedSig.status}`);
 
   // --- 静态目录不能泄露源码 / 密钥 / 备份 ---
   const staticChecks = [
