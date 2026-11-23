@@ -39,7 +39,9 @@ route_planning（规划路线）、weather（查天气）。
    不要假装已经导出成功。
 9. 车次、航班、车站这类列表，界面会自动渲染成卡片（含车次号、时刻、票价、余票、准点率）。
    所以你不要再把明细整整齐齐复述一遍，只给结论、取舍建议、和需要提醒的点
-   （比如"二等座已售罄""机票不含税费"）。数据一律以工具返回为准，不要自己补数字。`;
+   （比如"二等座已售罄""机票不含税费"）。数据一律以工具返回为准，不要自己补数字。
+10. 交通类工具（火车票、航班、空铁联运）默认没有常驻。用户问这些时，先调用 use_skill
+    并把 skill 设为 tripmatch，加载成功后再调用具体工具；已经加载过的会话不用重复加载。`;
 
 class SessionStore {
   constructor({ maxSessions = 500, maxHistoryTurns = 20, ttlMs = 0, systemPrompt = SYSTEM_PROMPT } = {}) {
@@ -61,6 +63,8 @@ class SessionStore {
     } else {
       session = {
         messages: [{ role: 'system', content: this.systemPrompt }],
+        // 本会话已加载的工具 skill 包里的工具名；由 use_skill 追加
+        activeSkills: new Set(),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -79,6 +83,11 @@ class SessionStore {
   /** 只取消息快照，用于拼装本轮请求：不要直接改它，落库走 appendTurn。 */
   history(sessionId) {
     return this.touch(sessionId).messages;
+  }
+
+  /** 只看不建：按需加载工具时要读会话状态，但不能因此新建会话。 */
+  peek(sessionId) {
+    return sessionId ? this.sessions.get(sessionId) : undefined;
   }
 
   /**

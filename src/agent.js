@@ -62,7 +62,7 @@ class Agent {
    * 调用一次模型，流式读取，逐段回调 onDelta。
    * 返回 { content, toolCalls }，其中 toolCalls 已按 index 拼装成完整结构。
    */
-  async streamChatCompletion(messages, { signal, onDelta, round } = {}) {
+  async streamChatCompletion(messages, { signal, onDelta, round, tools } = {}) {
     let response;
     try {
       response = await this.fetchImpl(this.config.aiApiUrl, {
@@ -74,7 +74,7 @@ class Agent {
         body: JSON.stringify({
           model: this.config.aiModel,
           messages,
-          tools: this.registry.tools,
+          tools: tools || this.registry.tools,
           tool_choice: 'auto',
           temperature: this.config.aiTemperature,
           stream: true,
@@ -184,7 +184,7 @@ class Agent {
    * Agent 主循环：模型决定调工具 -> 执行 -> 把结果回填 -> 再来一轮，直到产出最终回答。
    * 返回完整回答文本。
    */
-  async run(messages, { signal, onDelta, onToolResult } = {}) {
+  async run(messages, { signal, onDelta, onToolResult, sessionId, getTools } = {}) {
     const config = this.config;
 
     for (let step = 0; step < config.maxToolSteps; step += 1) {
@@ -197,6 +197,8 @@ class Agent {
           signal: round.signal,
           onDelta,
           round,
+          // 每轮重算：模型刚调完 use_skill，下一轮就该看到新工具
+          tools: typeof getTools === 'function' ? getTools(sessionId) : undefined,
         });
       } finally {
         round.dispose();
@@ -222,7 +224,7 @@ class Agent {
 
           let toolResult;
           try {
-            toolResult = await this.registry.run(call.function.name, args, { signal });
+            toolResult = await this.registry.run(call.function.name, args, { signal, sessionId });
           } catch (error) {
             if (error instanceof AgentAbortError) throw error;
             if (signal && signal.aborted) throw new AgentAbortError();

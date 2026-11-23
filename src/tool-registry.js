@@ -34,6 +34,12 @@ class ToolRegistry {
     return this.schemas;
   }
 
+  /** 只取指定名字的 schema（按名字集合顺序稳定），用于按需加载工具。 */
+  schemasFor(names) {
+    const wanted = names instanceof Set ? names : new Set(names || []);
+    return this.schemas.filter((schema) => wanted.has(schema.function.name));
+  }
+
   names() {
     return this.schemas.map((schema) => schema.function.name);
   }

@@ -130,6 +130,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 | `map_image` | 高德 | 地点或坐标 → 静态地图 PNG，返回 markdown 图片，前端直接渲染 |
 | `export_to_feishu` | 飞书 | 行程单 → 飞书云文档，返回可分享链接（需配应用凭证） |
 | `tripmatch__*` | 飞常准 MCP | 航班票价 / 铁路余票 / 空铁联运，来自远程 MCP（需配 API Key） |
+| `use_skill` | 内置 | 按需加载工具包（当前只有 `tripmatch`），基线里只占一个 schema |
 
 和风那条路是这样走的（v1 接口，和高德那套"城市名直接查"不同）：
 
@@ -360,6 +361,50 @@ Train tickets: {'code': 200, 'data': [{'trainNumber': 'G52', 'seatLists': [{'sea
 `src/ui-cards.js` 的顺序是：去前缀 → JSON 试一次 → 失败再走 Python 字面量 → 按字段特征
 （`trainNumber` / `FlightNo` / `station_name`）识别是哪类列表 → 生成卡片对象。
 服务端用 `error_code: 10` 表达"查到了但没有数据"，这种不生成空卡片。
+
+---
+
+## 按需加载工具（skill 包）
+
+接完 MCP 之后工具涨到 15 个，**每轮对话都要把 15 份 JSON Schema 塞进 prompt**——其中 8 个是
+火车票/航班，而绝大多数对话根本用不到。实测这部分占了约 3800 tokens/轮。
+
+所以加了「工具 skill 包」：把一组工具收进一个包里，基线只暴露核心工具 + 一个 `use_skill`，
+模型真需要时才加载。
+
+```
+基线（每轮都发）: geocode, poi_search, route_planning, weather, map_image, export_to_feishu, use_skill
+skill 包（按需） : tripmatch → 8 个火车/航班工具
+```
+
+| | tools JSON | 估算 tokens |
+|---|---|---|
+| 全量 15 个 | 10,417 字符 | ≈ 4,735 |
+| 基线 7 个 | 2,027 字符 | ≈ 921 |
+| **每轮省** | **8,390 字符** | **≈ 3,814** |
+
+### 怎么工作的
+
+1. 会话对象上有个 `activeSkills: Set`，记录这个会话加载过哪些包里的工具；
+2. `Agent` 每轮调 `getTools(sessionId)` **重新算** tools 列表（基线 + 已加载），
+   所以模型刚调完 `use_skill`，下一轮立刻就能看到新工具；
+3. `use_skill({skill:"tripmatch"})` 把整包工具名写进当前会话，返回可用工具清单；
+4. skill 是**会话级**的：同一会话里第二次问航班不需要重复加载，换会话则重新加载。
+
+实测一轮「12月4日合肥到北京的火车票」：模型先 `use_skill` → 再查票 → 出卡片；
+紧接着问「同一天的航班」，直接调航班工具，没有第二次 `use_skill`。
+
+### 为什么不是"把工具描述写短"
+
+那是省不出量级的：描述写短了模型选错工具，反而更贵。真正贵的是**不相关的工具也每轮都在
+prompt 里**。skill 包解决的是"不该出现的东西不出现"，而不是"出现了但变短"。
+
+### 一个实现上的坑
+
+`SkillCatalog` 必须在**所有工具注册完之后**才能算。MCP 工具是 `main()` 里异步注册的，
+如果在 `createDeps()` 里提前算，会得到一个空目录，`use_skill` 永远不会出现——
+这个 bug 测试直接抓到了（基线路由里没有 `use_skill`）。所以拆出了 `applyToolSkills(deps)`，
+在 MCP 注册之后再调用。
 
 ---
 
@@ -656,7 +701,7 @@ npm test
   PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：87 通过 / 0 失败
+结果：91 通过 / 0 失败
 ```
 
 ---
@@ -706,6 +751,7 @@ npm test
 - [x] 飞书云文档导出（建文档 → Markdown 转 block → 批量插入 → 授权链接）
 - [x] MCP 客户端（飞常准 Tripmatch：航班票价 / 铁路余票 / 空铁联运）
 - [x] 车次/航班结果渲染成结构化卡片，模型不再复述明细
+- [x] 工具 skill 包：MCP 工具按需加载，每轮省约 3800 tokens
 - [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
 - [ ] 工具结果加上结构化展示（地图卡片、路线图）
 - [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）

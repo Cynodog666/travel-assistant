@@ -36,9 +36,28 @@ const { buildUiCard } = require('./src/ui-cards');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
+const {
+  SkillCatalog,
+  buildUseSkillSchema,
+  createUseSkillHandler,
+  createToolsResolver,
+} = require('./src/tool-skills');
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const MAX_MESSAGE_LENGTH = 4000;
+
+/**
+ * 工具 skill 包：MCP 那批（8 个）默认不注入 prompt，
+ * 模型真要用火车/航班时先调 use_skill 加载，这才是省 token 的关键。
+ */
+const DEFAULT_SKILL_PACKS = [
+  {
+    name: 'tripmatch',
+    title: '火车票 / 航班 / 空铁联运',
+    description: '查高铁余票与票价、航班班次与准点率、空铁联运中转方案、车站查询',
+    match: (toolName) => toolName.startsWith('tripmatch__'),
+  },
+];
 
 const generateSessionId = () => crypto.randomUUID();
 
@@ -115,17 +134,47 @@ function createDeps(config) {
   const feishuTool = feishu ? createFeishuExportTool({ client: feishu }) : null;
 
   const registry = createToolRegistry(config, amap, qweather, mapImage, feishuTool);
-  const agent = new Agent({ config, registry });
   const sessions = new SessionStore({
     maxSessions: config.maxSessions,
     maxHistoryTurns: config.maxHistoryTurns,
     ttlMs: config.sessionTtlMs,
   });
+
+  const agent = new Agent({ config, registry });
   return { amap, qweather, mapImage, staticMap, feishu, registry, agent, sessions };
 }
 
+/**
+ * 工具 skill 包必须在**所有工具注册完之后**再算：
+ * MCP 工具是 main() 里异步注册的，createDeps 时还看不到它们。
+ * 先算会得到一个空目录，use_skill 就永远不会出现。
+ */
+function applyToolSkills(deps, packs = DEFAULT_SKILL_PACKS) {
+  const catalog = new SkillCatalog(deps.registry, packs);
+  const hiddenTools = catalog.hiddenToolNames;
+  const baseNames = deps.registry.names().filter((name) => !hiddenTools.includes(name));
+
+  if (catalog.names().length) {
+    deps.registry.register({
+      schema: buildUseSkillSchema(catalog),
+      handler: createUseSkillHandler({ catalog, sessions: deps.sessions }),
+    });
+    baseNames.push('use_skill');
+  }
+
+  deps.catalog = catalog;
+  deps.getTools = createToolsResolver({
+    registry: deps.registry,
+    catalog,
+    sessions: deps.sessions,
+    baseNames,
+  });
+  return deps;
+}
+
 function createApp(config, deps = createDeps(config)) {
-  const { amap, registry, agent, sessions, staticMap } = deps;
+  const { amap, registry, agent, sessions, staticMap, catalog = null } = deps;
+  const getTools = deps.getTools || (() => registry.tools);
   const app = express();
 
   app.disable('x-powered-by');
@@ -187,6 +236,8 @@ function createApp(config, deps = createDeps(config)) {
       model: config.aiModel,
       weatherProvider: weatherProviderOf(config),
       tools: registry.names(),
+      skills: catalog ? catalog.names() : [],
+      baseTools: deps.getTools(null).map((schema) => schema.function.name),
       feishu: Boolean(config.feishuAppId),
       mcpLinked: Boolean(deps.mcp),
       // 前端用它决定要不要弹令牌输入层；不涉及任何密钥内容
@@ -261,7 +312,7 @@ function createApp(config, deps = createDeps(config)) {
     try {
       const session = sessions.touch(input.sessionId);
       const working = [...session.messages, { role: 'user', content: input.message }];
-      const reply = await agent.run(working, {});
+      const reply = await agent.run(working, { sessionId: input.sessionId, getTools });
       sessions.appendTurn(input.sessionId, input.message, reply);
       res.json({ reply, sessionId: input.sessionId });
     } catch (error) {
@@ -306,6 +357,8 @@ function createApp(config, deps = createDeps(config)) {
 
       const reply = await agent.run(working, {
         signal: controller.signal,
+        sessionId: input.sessionId,
+        getTools,
         onDelta: (delta) => send('delta', { content: delta }),
         // 结构化的工具结果直接推成卡片事件，前端原样渲染，不劳模型复述
         onToolResult: (toolName, toolResult) => {
@@ -415,7 +468,7 @@ async function main() {
     }
   }
 
-  const app = createApp(config, deps);
+  const app = createApp(config, applyToolSkills(deps));
 
   if (!config.accessToken) {
     if (config.nodeEnv === 'production') {

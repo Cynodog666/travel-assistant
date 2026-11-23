@@ -65,23 +65,37 @@ const mockModel = http.createServer((req, res) => {
     const send = (delta, finish = null) =>
       res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
 
-    if (!hasToolResult) {
-      // 第一轮：按用户问的内容选工具——问火车走 MCP（顺带验证卡片），其余走天气
-      const lastUser = [...(body.messages || [])].reverse().find((m) => m.role === 'user');
-      const userText = (lastUser && lastUser.content) || '';
-      const wantsTrain = userText.includes('火车');
+    // 按「已发生过几轮工具调用」决定这一步该干什么：
+    // 火车：先 use_skill 加载 → 再查票 → 最后出正文（三轮）
+    // 天气：直接查 → 出正文（两轮）
+    const lastUser = [...(body.messages || [])].reverse().find((m) => m.role === 'user');
+    const userText = (lastUser && lastUser.content) || '';
+    const wantsTrain = userText.includes('火车');
+    const toolRounds = (body.messages || []).filter((m) => m.role === 'assistant' && m.tool_calls).length;
+    const availableTools = (body.tools || []).map((t) => t.function.name);
+    const hasTrainTool = availableTools.includes('tripmatch__train_search');
 
-      const toolName = wantsTrain ? 'tripmatch__train_search' : 'weather';
-      const toolArgs = wantsTrain
-        ? '{"from_city":"合肥","to_city":"北京","date":"2026-12-04"}'
-        : '{"city":"长沙"}';
+    let nextCall = null;
+    if (wantsTrain) {
+      if (toolRounds === 0 && !hasTrainTool) {
+        nextCall = { name: 'use_skill', args: '{"skill":"tripmatch"}' };
+      } else if (toolRounds === 1) {
+        nextCall = {
+          name: 'tripmatch__train_search',
+          args: '{"from_city":"合肥","to_city":"北京","date":"2026-12-04"}',
+        };
+      }
+    } else if (toolRounds === 0) {
+      nextCall = { name: 'weather', args: '{"city":"长沙"}' };
+    }
 
+    if (nextCall) {
       // 故意把 name 和 arguments 都拆成多个分片，模拟真实模型的增量返回
       const fragments = [
-        { index: 0, id: 'call_abc', type: 'function', function: { name: toolName.slice(0, 5), arguments: '' } },
-        { index: 0, function: { name: toolName.slice(5), arguments: toolArgs.slice(0, 6) } },
-        { index: 0, function: { arguments: toolArgs.slice(6, 13) } },
-        { index: 0, function: { arguments: toolArgs.slice(13) } },
+        { index: 0, id: 'call_abc', type: 'function', function: { name: nextCall.name.slice(0, 5), arguments: '' } },
+        { index: 0, function: { name: nextCall.name.slice(5), arguments: nextCall.args.slice(0, 6) } },
+        { index: 0, function: { arguments: nextCall.args.slice(6, 13) } },
+        { index: 0, function: { arguments: nextCall.args.slice(13) } },
       ];
       for (const fragment of fragments) {
         send({ tool_calls: [fragment] });
@@ -93,12 +107,7 @@ const mockModel = http.createServer((req, res) => {
       return;
     }
 
-    // 第二轮：模型拿到工具结果后输出正文
-    const lastUserText = (() => {
-      const lastUser = [...(body.messages || [])].reverse().find((m) => m.role === 'user');
-      return (lastUser && lastUser.content) || '';
-    })();
-    const wantsTrain = lastUserText.includes('火车');
+    // 最后一轮：拿到工具结果后输出正文
     if (wantsTrain) trainRoundBody = body;
     else secondRoundBody = body;
 
@@ -964,6 +973,45 @@ function runUnitTests() {
       buildUiCard('tripmatch__getFlightPriceByCities', "Flight prices: {'code': 200, 'data': {'error_code': 10, 'error': '暂无数据'}}") === null
     );
     check('卡片：非列表结果（天气对象）不生成卡片', buildUiCard('weather', { now: { text: '多云' } }) === null);
+
+    // --- 工具 skill 包：按需加载（省 prompt）---
+    const { SkillCatalog, createToolsResolver } = require('../src/tool-skills');
+    const skillRegistry = new ToolRegistry();
+    for (const name of ['geocode', 'weather', 'tripmatch__train_search', 'tripmatch__flight_search']) {
+      skillRegistry.register({
+        schema: { type: 'function', function: { name, description: name } },
+        handler: async () => name,
+      });
+    }
+
+    const catalog = new SkillCatalog(skillRegistry, [
+      { name: 'tripmatch', title: '火车/航班', description: '查车次与航班', match: (n) => n.startsWith('tripmatch__') },
+    ]);
+    skillRegistry.register({ schema: { type: 'function', function: { name: 'use_skill' } }, handler: async () => ({}) });
+
+    const baseNames = skillRegistry.names().filter((n) => !catalog.hiddenToolNames.includes(n));
+    const emptySession = { peek: () => ({ activeSkills: new Set() }) };
+    const resolveBefore = createToolsResolver({ registry: skillRegistry, catalog, sessions: emptySession, baseNames });
+    const beforeNames = resolveBefore('s1').map((s) => s.function.name);
+
+    check(
+      'skill：收进技能包的工具不在基线 tools 里',
+      !beforeNames.some((n) => n.startsWith('tripmatch__')) &&
+        beforeNames.includes('use_skill') &&
+        beforeNames.includes('geocode'),
+      beforeNames.join(',')
+    );
+    check('skill：清单只写能力不写 schema', /tripmatch：火车\/航班/.test(catalog.summaryText()) && catalog.summaryText().length < 300);
+
+    const activeSession = { peek: () => ({ activeSkills: new Set(['tripmatch__train_search']) }) };
+    const resolveAfter = createToolsResolver({ registry: skillRegistry, catalog, sessions: activeSession, baseNames });
+    const afterNames = resolveAfter('s1').map((s) => s.function.name);
+
+    check(
+      'skill：加载后该工具出现在下一轮 tools',
+      afterNames.includes('tripmatch__train_search') && !afterNames.includes('tripmatch__flight_search'),
+      afterNames.join(',')
+    );
   })();
 }
 
@@ -994,6 +1042,16 @@ async function runE2ETests() {
       health.tools.includes('tripmatch__train_search') &&
       !health.tools.includes('tripmatch__weather_at_airport'),
     (health.tools || []).filter((n) => n.startsWith('tripmatch__')).join(',')
+  );
+
+  check(
+    'skill：MCP 工具默认不进基线 tools（prompt 成本下来了）',
+    Array.isArray(health.skills) &&
+      health.skills.includes('tripmatch') &&
+      Array.isArray(health.baseTools) &&
+      !health.baseTools.some((n) => n.startsWith('tripmatch__')) &&
+      health.baseTools.includes('use_skill'),
+    `baseline=${(health.baseTools || []).join(',')}`
   );
 
   // --- 静态图代理必须验签名 ---
