@@ -8,6 +8,7 @@
     "dev": "node --watch server.js",
     "test": "node test/smoke.js",
     "check:feishu": "node scripts/check-feishu.js",
+    "inspect:doc": "node scripts/inspect-doc.js",
     "gen-token": "node -e \"console.log(require('crypto').randomBytes(24).toString('base64url'))\""
   },
   "keywords": [

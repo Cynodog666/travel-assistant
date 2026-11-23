@@ -291,16 +291,150 @@ class FeishuClient {
     return (meta && meta.url) || '';
   }
 
+  /** 往某个 block 下插入子块；index 为 -1 表示追加到末尾。 */
+  async insertDescendant(documentId, { childrenId, descendants, index = -1 }) {
+    await this.request(
+      'POST',
+      `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(documentId)}/descendant`,
+      {
+        query: { document_revision_id: -1 },
+        body: { children_id: childrenId, index, descendants },
+      }
+    );
+  }
+
+  /** 文首的高亮块：一眼看到标题和关键信息。 */
+  async insertHeaderCallout(documentId, { title, lines, emojiId = 'bulb' }) {
+    const childIds = lines.map((_, i) => `hdr_line_${i}`);
+    const descendants = [
+      {
+        block_id: 'hdr_callout',
+        block_type: 19,
+        callout: { emoji_id: emojiId },
+        children: childIds,
+      },
+      ...lines.map((line, i) => ({
+        block_id: childIds[i],
+        block_type: 2,
+        text: {
+          elements: [
+            {
+              text_run: {
+                content: String(line),
+                text_element_style: i === 0 ? { bold: true } : {},
+              },
+            },
+          ],
+        },
+        children: [],
+      })),
+    ];
+
+    await this.insertDescendant(documentId, {
+      childrenId: ['hdr_callout'],
+      descendants,
+      index: 0,
+    });
+
+    return { title, lines: lines.length };
+  }
+
+  /** 在每个一级标题前插一条分割线，让各段之间有呼吸感。 */
+  async insertSectionDividers(documentId, { blocks, firstLevelIds }) {
+    const byId = new Map((blocks || []).map((block) => [block.block_id, block]));
+    const positions = [];
+
+    firstLevelIds.forEach((id, index) => {
+      const block = byId.get(id);
+      if (!block) return;
+      if (block.block_type !== 3 && block.block_type !== 4) return; // heading1 / heading2
+      if (index === 0) return;
+
+      // 前一个块已经是分割线就不再加：模型自己写的 `---` 会被 convert 成原生分割线，
+      // 再插一条就会出现两个挨着的横线。
+      const previous = byId.get(firstLevelIds[index - 1]);
+      if (previous && previous.block_type === 22) return;
+
+      positions.push(index);
+    });
+
+    // 从后往前插，前面的位置才不会被顶偏
+    positions.sort((a, b) => b - a);
+    for (const [i, position] of positions.entries()) {
+      await this.insertDescendant(documentId, {
+        childrenId: [`divider_${i}`],
+        descendants: [{ block_id: `divider_${i}`, block_type: 22, divider: {}, children: [] }],
+        index: position,
+      });
+    }
+
+    return positions.length;
+  }
+
+  /** 文末署名：数据来源 + 生成时间。 */
+  async insertFooterNote(documentId, content) {
+    await this.insertDescendant(documentId, {
+      childrenId: ['footer_note'],
+      descendants: [
+        {
+          block_id: 'footer_note',
+          block_type: 15,
+          quote: { elements: [{ text_run: { content: String(content) } }] },
+          children: [],
+        },
+      ],
+      index: -1,
+    });
+  }
+
   /**
-   * 一条龙：建文档 → Markdown 转 blocks → 插入 → 可选授权。
-   * 返回 { documentId, url, blocks, shared }。
+   * 一条龙：建文档 → Markdown 转 blocks → 插入 → 装饰（高亮块/分割线/署名）→ 分享。
+   * 返回 { documentId, url, blocks, shared, linkShared, decorate }。
    */
-  async exportMarkdown({ title, markdown }) {
+  async exportMarkdown({ title, markdown, summary = '', highlights = [], decorate = true }) {
     if (!markdown || !String(markdown).trim()) throw new Error('没有可导出的内容');
 
-    const documentId = await this.createDocument(title || '旅行行程单');
+    const documentTitle = title || '旅行行程单';
+    const documentId = await this.createDocument(documentTitle);
     const converted = await this.convertMarkdown(String(markdown));
     const inserted = await this.insertBlocks(documentId, converted);
+
+    // 装饰是可选的：加了更好看，但失败了不能影响文档已经生成
+    const decoration = { header: false, dividers: 0, footer: false };
+    let decorateError = '';
+
+    if (decorate) {
+      try {
+        decoration.dividers = await this.insertSectionDividers(documentId, converted);
+
+        const lines = [summary, ...(Array.isArray(highlights) ? highlights : [])]
+          .map((line) => String(line || '').trim())
+          .filter(Boolean);
+
+        // 模型没给概览就用正文第一段兜底
+        if (!lines.length) {
+          const firstParagraph = String(markdown)
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => line && !line.startsWith('#') && !line.startsWith('|') && !line.startsWith('-'));
+          if (firstParagraph) lines.push(firstParagraph.slice(0, 120));
+        }
+
+        if (lines.length) {
+          await this.insertHeaderCallout(documentId, { title: documentTitle, lines });
+          decoration.header = true;
+        }
+
+        await this.insertFooterNote(
+          documentId,
+          `由「坤坤 · 旅行管家」生成 · ${new Date().toLocaleString('zh-CN', { hour12: false })}` +
+            ' · 数据来源：高德地图 / 和风天气 / 飞常准'
+        );
+        decoration.footer = true;
+      } catch (error) {
+        decorateError = error.message;
+      }
+    }
 
     // 两种授信方式，能配哪个配哪个，都失败也不影响文档本身已经建好
     let linkShared = false;
@@ -339,6 +473,8 @@ class FeishuClient {
       blocks: inserted,
       shared,
       linkShared,
+      decoration,
+      decorateError,
       shareError: shareErrors.join('；'),
       urlError,
     };
@@ -358,7 +494,21 @@ const FEISHU_EXPORT_TOOL = {
       type: 'object',
       properties: {
         title: { type: 'string', description: '文档标题，例如「长沙 3 日行程单」' },
-        markdown: { type: 'string', description: '文档正文，Markdown 格式，可含标题、列表、表格' },
+        summary: { type: 'string', description: '一句话概览，会显示在文档顶部的高亮块里，例如「3 天 2 晚 · 预算 1500 元 · 岳麓山 + 橘子洲」' },
+        highlights: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '2-4 条关键信息，显示在顶部高亮块，例如「出行日期：12/04-12/06」「天气：第1天中雨，带伞」',
+        },
+        markdown: {
+          type: 'string',
+          description:
+            '文档正文（Markdown）。为了好看请这样写：' +
+            '每个大板块用 `## 📅 Day 1 · 12/04 · 多云` 这种带 emoji 的二级标题；' +
+            '关键信息用无序列表，不要把内容一股脑塞进表格；' +
+            '表格最多 1-2 个，只用于需要对齐对比的地方（预算明细、车次对比）；' +
+            '重要提醒单独用一段以「⚠️」开头。',
+        },
       },
       required: ['title', 'markdown'],
     },
@@ -373,8 +523,13 @@ function createFeishuExportTool({ client }) {
       const markdown = String((args && args.markdown) || '');
       if (!markdown.trim()) return { error: '缺少参数 markdown' };
 
+      const summary = String((args && args.summary) || '').trim();
+      const highlights = Array.isArray(args && args.highlights)
+        ? args.highlights.map((item) => String(item)).slice(0, 4)
+        : [];
+
       try {
-        const result = await client.exportMarkdown({ title, markdown });
+        const result = await client.exportMarkdown({ title, markdown, summary, highlights });
         return {
           ...result,
           tip: result.url

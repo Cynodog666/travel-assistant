@@ -748,7 +748,12 @@ function runUnitTests() {
       http: fakeFeishuHttp,
     });
 
-    const exported = await feishu.exportMarkdown({ title: '长沙 3 日行程单', markdown: '# Day 1\n\n- 岳麓山' });
+    const exported = await feishu.exportMarkdown({
+      title: '长沙 3 日行程单',
+      summary: '3 天 2 晚 · 预算 1500 元',
+      highlights: ['12/04 出发', '第 1 天中雨'],
+      markdown: '# Day 1\n\n- 岳麓山',
+    });
     const tokenCalls = feishuCalls.filter((c) => String(c.url).endsWith('/tenant_access_token/internal')).length;
     const createCall = feishuCalls.find((c) => String(c.url).endsWith('/open-apis/docx/v1/documents'));
     const convertCall = feishuCalls.find((c) => String(c.url).endsWith('/blocks/convert'));
@@ -782,6 +787,74 @@ function runUnitTests() {
           publicCall.params.type === 'docx'
       ) && exported.linkShared === true
     );
+
+    // --- 文档装饰：高亮块 / 分割线 / 署名 ---
+    check(
+      '飞书：导出时自动加装饰（高亮块 + 分割线 + 署名）',
+      exported.decoration.header === true && exported.decoration.footer === true,
+      JSON.stringify(exported.decoration)
+    );
+
+    const headerCall = feishuCalls.find(
+      (c) => Array.isArray(c.data && c.data.descendants) && c.data.descendants[0].block_type === 19
+    );
+    check(
+      '飞书：高亮块放在文首，首行加粗',
+      Boolean(
+        headerCall &&
+          headerCall.data.index === 0 &&
+          headerCall.data.descendants[0].callout &&
+          headerCall.data.descendants[1].text.elements[0].text_run.text_element_style.bold === true
+      )
+    );
+
+    // 分割线：只在第 2 个及以后的标题前插，且从后往前插避免位置被顶偏
+    const dividerCalls = [];
+    const dividerClient = new FeishuClient({
+      appId: 'cli_test',
+      appSecret: 'secret',
+      http: {
+        async request(config) {
+          const path = String(config.url).replace('https://open.feishu.cn', '');
+          if (path === '/open-apis/auth/v3/tenant_access_token/internal') {
+            return { data: { code: 0, msg: 'ok', tenant_access_token: 't-x', expire: 7200 } };
+          }
+          if (path.endsWith('/descendant')) dividerCalls.push(config);
+          return { data: { code: 0, data: {} } };
+        },
+      },
+    });
+
+    const dividerBlocks = await dividerClient.insertSectionDividers('doxcn1', {
+      firstLevelIds: ['a', 'b', 'c', 'd'],
+      blocks: [
+        { block_id: 'a', block_type: 3 },
+        { block_id: 'b', block_type: 2 },
+        { block_id: 'c', block_type: 3 },
+        { block_id: 'd', block_type: 3 },
+      ],
+    });
+
+    check(
+      '飞书：分割线只插在章节之间，且倒序插入',
+      dividerBlocks === 2 &&
+        dividerCalls.length === 2 &&
+        dividerCalls[0].data.index === 3 &&
+        dividerCalls[1].data.index === 2 &&
+        dividerCalls[0].data.descendants[0].block_type === 22,
+      dividerCalls.map((c) => c.data.index).join(',')
+    );
+
+    // 模型自己写的 `---` 会被 convert 成原生分割线，不能再补一条
+    const noDouble = await dividerClient.insertSectionDividers('doxcn1', {
+      firstLevelIds: ['a', 'hr', 'b'],
+      blocks: [
+        { block_id: 'a', block_type: 3 },
+        { block_id: 'hr', block_type: 22 },
+        { block_id: 'b', block_type: 3 },
+      ],
+    });
+    check('飞书：标题前已有原生分割线时不再补一条', noDouble === 0, `插了 ${noDouble} 条`);
     check(
       '飞书：member_type 兼容 open_id 写法',
       new FeishuClient({ appId: 'a', appSecret: 'b', shareMemberType: 'open_id' }).shareMemberType === 'openid'
