@@ -30,6 +30,7 @@ const { AmapClient, TOOLS } = require('./src/amap');
 const { QWeatherClient, WEATHER_TOOL } = require('./src/qweather');
 const { ToolRegistry } = require('./src/tool-registry');
 const { createStaticMapService, createMapImageTool, STATICMAP_PATH } = require('./src/static-map');
+const { FeishuClient, createFeishuExportTool } = require('./src/feishu');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
@@ -43,7 +44,7 @@ const generateSessionId = () => crypto.randomUUID();
  * 组装工具：高德固定三个（地理编码 / POI / 路线），
  * weather 则按配置二选一——和风优先，没有 key 就用高德自带的实时天气。
  */
-function createToolRegistry(config, amap, qweather, mapImage) {
+function createToolRegistry(config, amap, qweather, mapImage, feishuTool) {
   const registry = new ToolRegistry();
   const amapToolNames = ['geocode', 'poi_search', 'route_planning'];
   const useQWeather = weatherProviderOf(config) === 'qweather';
@@ -67,6 +68,10 @@ function createToolRegistry(config, amap, qweather, mapImage) {
 
   if (mapImage) {
     registry.register({ schema: mapImage.schema, handler: mapImage.handler });
+  }
+
+  if (feishuTool) {
+    registry.register({ schema: feishuTool.schema, handler: feishuTool.handler });
   }
 
   return registry;
@@ -93,14 +98,27 @@ function createDeps(config) {
   const staticMap = createStaticMapService({ amap, secret: staticMapSecret });
   const mapImage = createMapImageTool({ amap, service: staticMap });
 
-  const registry = createToolRegistry(config, amap, qweather, mapImage);
+  // 飞书导出：没配应用凭证就不注册这个工具，免得模型选到必然失败的选项
+  const feishu = config.feishuAppId
+    ? new FeishuClient({
+        appId: config.feishuAppId,
+        appSecret: config.feishuAppSecret,
+        webOrigin: config.feishuWebOrigin,
+        folderToken: config.feishuFolderToken,
+        shareTo: config.feishuShareTo,
+        shareMemberType: config.feishuShareMemberType,
+      })
+    : null;
+  const feishuTool = feishu ? createFeishuExportTool({ client: feishu }) : null;
+
+  const registry = createToolRegistry(config, amap, qweather, mapImage, feishuTool);
   const agent = new Agent({ config, registry });
   const sessions = new SessionStore({
     maxSessions: config.maxSessions,
     maxHistoryTurns: config.maxHistoryTurns,
     ttlMs: config.sessionTtlMs,
   });
-  return { amap, qweather, mapImage, staticMap, registry, agent, sessions };
+  return { amap, qweather, mapImage, staticMap, feishu, registry, agent, sessions };
 }
 
 function createApp(config, deps = createDeps(config)) {
@@ -166,6 +184,7 @@ function createApp(config, deps = createDeps(config)) {
       model: config.aiModel,
       weatherProvider: weatherProviderOf(config),
       tools: registry.names(),
+      feishu: Boolean(config.feishuAppId),
       // 前端用它决定要不要弹令牌输入层；不涉及任何密钥内容
       authRequired: Boolean(config.accessToken),
     });

@@ -575,6 +575,112 @@ function runUnitTests() {
       !signedPath.includes(keyProbe) && buildAmapStaticMapUrl({ key: keyProbe, location: '112.90,28.20' }).includes(keyProbe)
     );
     check('静态图：坐标和地址能区分开', looksLikeCoords('112.9,28.2') && !looksLikeCoords('长沙岳麓山'));
+
+    // --- 飞书云文档导出 ---
+    const { FeishuClient, explainFeishuError } = require('../src/feishu');
+
+    const feishuCalls = [];
+    const fakeFeishuHttp = {
+      async request(config) {
+        feishuCalls.push(config);
+        const path = String(config.url || '').replace('https://open.feishu.cn', '');
+        if (path === '/open-apis/auth/v3/tenant_access_token/internal') {
+          return { data: { code: 0, data: { tenant_access_token: 't-1', expire: 7200 } } };
+        }
+        if (path === '/open-apis/docx/v1/documents') {
+          return { data: { code: 0, data: { document: { document_id: 'doxcn1', revision_id: 1, title: config.data.title } } } };
+        }
+        if (path === '/open-apis/docx/v1/documents/blocks/convert') {
+          return {
+            data: {
+              code: 0,
+              data: {
+                first_level_block_ids: ['h1', 't1'],
+                blocks: [
+                  { block_id: 'h1', block_type: 3, heading1: { elements: [] }, children: [], revision_id: 1, parent_id: '' },
+                  {
+                    block_id: 't1',
+                    block_type: 31,
+                    table: { property: { row_size: 1, column_size: 1 }, merge_info: [{ row_span: 1 }] },
+                    children: ['c1'],
+                    revision_id: 2,
+                  },
+                  { block_id: 'c1', block_type: 32, table_cell: {}, children: ['p1'] },
+                  { block_id: 'p1', block_type: 2, text: { elements: [] }, children: [] },
+                ],
+              },
+            },
+          };
+        }
+        if (path.includes('/blocks/') && path.endsWith('/descendant')) {
+          return { data: { code: 0, data: { block_id_relations: [] } } };
+        }
+        if (path.includes('/permissions/')) return { data: { code: 0, data: {} } };
+        return { data: { code: 999, msg: 'unexpected ' + path } };
+      },
+    };
+
+    const feishu = new FeishuClient({
+      appId: 'cli_test',
+      appSecret: 'secret',
+      webOrigin: 'https://demo.feishu.cn',
+      folderToken: 'fld_test',
+      shareTo: 'me@example.com',
+      http: fakeFeishuHttp,
+    });
+
+    const exported = await feishu.exportMarkdown({ title: '长沙 3 日行程单', markdown: '# Day 1\n\n- 岳麓山' });
+    const tokenCalls = feishuCalls.filter((c) => String(c.url).endsWith('/tenant_access_token/internal')).length;
+    const createCall = feishuCalls.find((c) => String(c.url).endsWith('/open-apis/docx/v1/documents'));
+    const convertCall = feishuCalls.find((c) => String(c.url).endsWith('/blocks/convert'));
+    const insertCall = feishuCalls.find((c) => String(c.url).endsWith('/descendant'));
+    const permCall = feishuCalls.find((c) => String(c.url).includes('/permissions/'));
+
+    check('飞书：导出返回可分享链接', exported.url === 'https://demo.feishu.cn/docx/doxcn1', exported.url);
+    check('飞书：tenant_access_token 只取一次（复用缓存）', tokenCalls === 1, `实际 ${tokenCalls} 次`);
+    check('飞书：建文档时带上文件夹 token', Boolean(createCall && createCall.data.folder_token === 'fld_test'));
+    check(
+      '飞书：Markdown 走 convert 接口转换',
+      Boolean(convertCall && convertCall.data.content_type === 'markdown' && convertCall.data.content.includes('岳麓山'))
+    );
+
+    const inserted = insertCall ? insertCall.data.descendants || [] : [];
+    const insertedIds = inserted.map((b) => b.block_id);
+    const tableBlock = inserted.find((b) => b.block_id === 't1');
+    check('飞书：回插的 block 已剔除只读字段', !inserted.some((b) => b.revision_id !== undefined || b.parent_id !== undefined || b.merge_info !== undefined));
+    check('飞书：表格与单元格的父子关系保留', Boolean(tableBlock && tableBlock.children.join() === 'c1') && insertedIds.includes('p1'));
+    check('飞书：一级块作为 children_id 提交', Boolean(insertCall && insertCall.data.children_id.join() === 'h1,t1'));
+    check('飞书：给分享对象授了权限', Boolean(permCall && permCall.data.member_id === 'me@example.com') && exported.shared === true);
+
+    // 超过 50 个一级块时分批
+    const batchCalls = [];
+    const batchClient = new FeishuClient({
+      appId: 'cli_test',
+      appSecret: 'secret',
+      http: {
+        async request(config) {
+          if (String(config.url).endsWith('/tenant_access_token/internal')) {
+            return { data: { code: 0, data: { tenant_access_token: 't-2', expire: 7200 } } };
+          }
+          batchCalls.push(config);
+          return { data: { code: 0, data: {} } };
+        },
+      },
+    });
+    const manyBlocks = [];
+    const manyIds = [];
+    for (let i = 0; i < 60; i += 1) {
+      manyIds.push(`b${i}`);
+      manyBlocks.push({ block_id: `b${i}`, block_type: 2, text: { elements: [] }, children: [] });
+    }
+    await batchClient.insertBlocks('doxcn1', { blocks: manyBlocks, firstLevelIds: manyIds });
+    check('飞书：一级块超过 50 个自动分批插入', batchCalls.length === 2, `实际 ${batchCalls.length} 次`);
+
+    check(
+      '飞书：错误码映射成可读提示',
+      explainFeishuError(1770040, 'no permission').includes('权限') &&
+        explainFeishuError(99991400, 'rate').includes('限流')
+    );
   })();
 }
 

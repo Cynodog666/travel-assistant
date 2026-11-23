@@ -26,6 +26,7 @@
 | 实时天气 | 按城市查询当前天气、温度、风力、湿度；配了和风后升级为「实时 + 逐日预报 + 气象预警」 |
 | 一键导航 | 路线规划结果自带高德深链（`amapuri://`）和 H5 链接，点一下直接开始导航 |
 | 地图配图 | `map_image` 工具生成静态地图，回答里直接出图（高德 key 不出服务端） |
+| 导出飞书 | `export_to_feishu` 工具把行程单写成飞书云文档，直接给可分享链接（可选） |
 | 多轮对话 | 基于 sessionId 隔离会话，自动裁剪上下文控制 token，闲置超时自动回收 |
 | 流式输出 | SSE 逐 token 推送，前端打字机效果 |
 | 接口缓存 | 高德请求走 LRU 缓存，重复查询不打外部接口 |
@@ -94,6 +95,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 │   ├── amap-uri.js      高德 URI：把路线变成可点击的导航链接
 │   ├── qweather.js      和风天气：实时 / 预报 / 预警（可选，按配置替换高德天气）
 │   ├── static-map.js    静态地图：签名 URL + 服务端代理取图
+│   ├── feishu.js        飞书云文档导出：建文档 → Markdown 转 block → 批量插入
 │   ├── tool-registry.js 工具注册表：schema 与 handler 的映射
 │   ├── session.js       会话存储：裁剪、TTL、容量淘汰
 │   ├── security.js      令牌校验 + 限流
@@ -122,6 +124,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 | `route_planning` | 高德 | 路线 + **导航链接**（appLink / webLink） |
 | `weather` | 和风 **或** 高德 | 配了 `QWEATHER_API_KEY` + `QWEATHER_BASE_URL` 就和风，否则退回高德实时值 |
 | `map_image` | 高德 | 地点或坐标 → 静态地图 PNG，返回 markdown 图片，前端直接渲染 |
+| `export_to_feishu` | 飞书 | 行程单 → 飞书云文档，返回可分享链接（需配应用凭证） |
 
 和风那条路是这样走的（v1 接口，和高德那套"城市名直接查"不同）：
 
@@ -177,6 +180,48 @@ map_image 工具 ──► 服务端用 HMAC 签一个 /api/staticmap?location=.
 - 有效期默认 1 小时。注意：**导出的 .html 行程单里如果嵌了地图，1 小时后图会失效**，
   要长期保存需要在导出时把图片转成 base64 内联。
 - 400/500 时高德返回的是 JSON 而不是图片，代理会识别出来转成 502，而不是把一段 JSON 当 PNG 吐给浏览器。
+
+---
+
+## 导出到飞书（可选）
+
+配好之后，用户说"把这行程导出到飞书"，模型会调用 `export_to_feishu`，拿回一条可分享的文档链接。
+
+### 开通步骤
+
+1. 打开 [飞书开发者后台](https://open.feishu.cn/app)，**创建企业自建应用**，名字随便（比如 `旅行助手`）
+2. 左侧「凭证与基础信息」，记下 **App ID** 和 **App Secret**
+3. 左侧「权限管理」，搜索并开通这三个（后台显示的是中文名）：
+   - **创建及编辑新版文档**（`docx:document`）
+   - **文本内容转换为云文档块**（Markdown 转 block 用的）
+   - **云文档权限**（把文档授权给你自己用的；找不到就先跳过，见下面「打不开文档」）
+4. 左侧「版本管理与发布」→ **创建版本** → 提交发布。企业版需要管理员审核，个人版一般直接通过
+5. 在浏览器打开飞书，地址栏形如 `https://yourname.feishu.cn` —— 这串就是 `FEISHU_WEB_ORIGIN`
+6. 把值填进 `.env`：
+
+```bash
+FEISHU_APP_ID=cli_xxxxxxxx
+FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx
+FEISHU_WEB_ORIGIN=https://yourname.feishu.cn
+FEISHU_SHARE_TO=你的飞书登录邮箱
+```
+
+7. 重启服务，`/api/health` 里应该出现 `"feishu": true` 和 `export_to_feishu` 工具
+
+### 为什么还要 `FEISHU_SHARE_TO`
+
+用 `tenant_access_token` 创建的文档**归属方是"应用"**，不是"你"。不授权的话，文档建成功了你也打不开——
+这是飞书的身份模型，不是 bug。所以创建完会调一次「添加协作者」接口，把你加进去（`full_access`）。
+如果这一步报权限错误，就是缺「云文档权限」这个 scope，去第 3 步补上再发布一次版本。
+
+### 实现上的几个细节
+
+- 走官方三段式：**建空文档 → `blocks/convert` 把 Markdown 转 block → `descendant` 批量插入**。
+  自己拼 block 会踩表格和嵌套列表的坑，没必要。
+- 表格 block 里的 `merge_info` 是只读字段，回插前必须删掉，否则报 `1770006 schema mismatch`。
+- 单次最多插 1000 个 block，代码按「每次 50 个一级块」分批，超了自动拆请求。
+- `tenant_access_token` 有效期 2 小时，缓存起来复用，提前 60 秒过期。
+- 文档链接 = `FEISHU_WEB_ORIGIN` + `/docx/` + `document_id`；不配 origin 就只能返回 id。
 
 ---
 
@@ -360,6 +405,12 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `QWEATHER_BASE_URL` | 配和风时必填 | — | 控制台「设置」里分给你的 API Host，前面补 `https://`（别照抄文档里的示例地址） |
 | `QWEATHER_TIMEOUT_MS` | 否 | `8000` | 和风接口超时 |
 | `STATICMAP_SECRET` | 否 | 复用 `ACCESS_TOKEN` / `AMAP_KEY` | 静态图链接的签名密钥，想单独轮换时设置 |
+| `FEISHU_APP_ID` | 否 | — | 飞书自建应用 App ID；不填就不注册飞书导出工具 |
+| `FEISHU_APP_SECRET` | 配飞书时必填 | — | 飞书自建应用 App Secret（与 App ID 必须成对） |
+| `FEISHU_WEB_ORIGIN` | 配飞书时建议填 | — | 租户域名，如 `https://yourname.feishu.cn`，用来拼文档链接 |
+| `FEISHU_SHARE_TO` | 配飞书时建议填 | — | 文档授权给谁（你的登录邮箱），否则你打不开这篇文档 |
+| `FEISHU_SHARE_MEMBER_TYPE` | 否 | `email` | 授权成员类型：`email` / `open_id` |
+| `FEISHU_FOLDER_TOKEN` | 否 | — | 指定文件夹，一般留空（tenant token 通常只能指定应用自建文件夹） |
 | `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
 | `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
 | `RATE_LIMIT_MAX` | 否 | `20` | 每 IP 每窗口最大请求数 |
@@ -461,7 +512,7 @@ npm test
   PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：56 通过 / 0 失败
+结果：66 通过 / 0 失败
 ```
 
 ---
@@ -502,6 +553,7 @@ npm test
 - [x] 和风天气（实时 + 预报 + 预警）与高德实时天气的按配置切换
 - [x] 路线结果带一键导航链接（`amapuri://` + H5 兜底）
 - [x] 静态地图配图（签名 URL + 服务端代理，key 不出服务端）
+- [x] 飞书云文档导出（建文档 → Markdown 转 block → 批量插入 → 授权链接）
 - [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
 - [ ] 工具结果加上结构化展示（地图卡片、路线图）
 - [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）

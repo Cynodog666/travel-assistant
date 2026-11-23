@@ -68,6 +68,16 @@ function loadConfig(env = process.env) {
     maxSessions: toInt('MAX_SESSIONS', env.MAX_SESSIONS, 500, { min: 1, max: 100_000 }),
     sessionTtlMs: toInt('SESSION_TTL_MS', env.SESSION_TTL_MS, 2 * 60 * 60 * 1000, { min: 60_000 }),
 
+    // 飞书云文档导出（可选）。app_id + app_secret 是自建应用凭证，
+    // web_origin 形如 https://your-tenant.feishu.cn，用来拼文档链接。
+    feishuAppId: (env.FEISHU_APP_ID || '').trim(),
+    feishuAppSecret: (env.FEISHU_APP_SECRET || '').trim(),
+    feishuWebOrigin: (env.FEISHU_WEB_ORIGIN || '').trim().replace(/\/+$/, ''),
+    feishuFolderToken: (env.FEISHU_FOLDER_TOKEN || '').trim(),
+    // 文档归属于「应用」，要把文档授权给某个人你才打得开：填邮箱或 open_id
+    feishuShareTo: (env.FEISHU_SHARE_TO || '').trim(),
+    feishuShareMemberType: (env.FEISHU_SHARE_MEMBER_TYPE || 'email').trim(),
+
     // 静态地图签名密钥：留空则退化为「ACCESS_TOKEN 或 AMAP_KEY」，
     // 想单独轮换图片链接的有效性时再设置它。
     staticMapSecret: (env.STATICMAP_SECRET || '').trim(),
@@ -100,6 +110,16 @@ function loadConfig(env = process.env) {
         '  和风天气的接口地址是每个项目独立的（控制台「设置 → API Host」），形如：',
         '    QWEATHER_BASE_URL=https://abcdefg.re.qweatherapi.com',
         '  想先用高德自带的实时天气，把 QWEATHER_API_KEY 留空即可。',
+      ].join('\n')
+    );
+  }
+
+  if (Boolean(config.feishuAppId) !== Boolean(config.feishuAppSecret)) {
+    throw new ConfigError(
+      [
+        'FEISHU_APP_ID 和 FEISHU_APP_SECRET 必须同时填写。',
+        '  两个值都在开发者后台「凭证与基础信息」里：https://open.feishu.cn/app',
+        '  不想用飞书导出就把两个都留空。',
       ].join('\n')
     );
   }
