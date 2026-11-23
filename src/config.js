@@ -80,6 +80,17 @@ function loadConfig(env = process.env) {
     // 链接分享：anyone_readable（互联网可读）/ tenant_readable（组织内可读）/ 留空不设置
     feishuLinkShare: (env.FEISHU_LINK_SHARE || '').trim(),
 
+    // 飞常准 Tripmatch MCP（可选）：航班票价 / 铁路余票 / 空铁联运
+    tripMatchApiKey: (env.TRIPMATCH_API_KEY || '').trim(),
+    tripMatchUrl: (env.TRIPMATCH_MCP_URL || 'https://ai.variflight.com/servers/tripmatch/mcp').trim(),
+    tripMatchPrefix: (env.TRIPMATCH_TOOL_PREFIX || 'tripmatch__').trim(),
+    // 逗号分隔的关键词白名单；留空表示注册服务端给的全部工具（工具多会吃 token）
+    tripMatchToolAllow: (env.TRIPMATCH_TOOL_ALLOW || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+    tripMatchTimeoutMs: toInt('TRIPMATCH_TIMEOUT_MS', env.TRIPMATCH_TIMEOUT_MS, 10_000, { min: 1_000, max: 120_000 }),
+
     // 静态地图签名密钥：留空则退化为「ACCESS_TOKEN 或 AMAP_KEY」，
     // 想单独轮换图片链接的有效性时再设置它。
     staticMapSecret: (env.STATICMAP_SECRET || '').trim(),

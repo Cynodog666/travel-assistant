@@ -25,6 +25,7 @@ const { spawn } = require('child_process');
 const APP_PORT = 3199;
 const MOCK_MODEL_PORT = 3299;
 const MOCK_QWEATHER_PORT = 3399;
+const MOCK_MCP_PORT = 3499;
 const ACCESS_TOKEN = 'test-token-please-change';
 
 const ROOT = path.join(__dirname, '..');
@@ -218,6 +219,10 @@ function startApp() {
       AMAP_KEY: 'mock-amap-key',
       QWEATHER_API_KEY: 'mock-qweather-key',
       QWEATHER_BASE_URL: `http://127.0.0.1:${MOCK_QWEATHER_PORT}`,
+      // 也验一下启动时自动接 MCP（假服务），白名单只放行 flight / train
+      TRIPMATCH_API_KEY: 'fake-trip-key',
+      TRIPMATCH_MCP_URL: `http://127.0.0.1:${MOCK_MCP_PORT}/mcp`,
+      TRIPMATCH_TOOL_ALLOW: 'flight,train',
       ACCESS_TOKEN,
       RATE_LIMIT_MAX: '200',
       SESSION_TTL_MS: '600000',
@@ -294,6 +299,69 @@ function fakeHttp(handler) {
       return { data: handler(url, options.params) };
     },
   };
+}
+
+/**
+ * 假 MCP 服务（Streamable HTTP）：
+ *   - initialize 回 SSE 并在响应头里给 Mcp-Session-Id
+ *   - notifications/initialized 回 202
+ *   - tools/list 回普通 JSON（用来覆盖两种响应形态）
+ *   - tools/call 回 SSE
+ */
+function createFakeMcpServer() {
+  const seen = [];
+  const tools = [
+    { name: 'flight_search', description: '查询航班票价', inputSchema: { type: 'object', properties: { from: { type: 'string' } } } },
+    { name: 'train_search', description: '查询火车票余票', inputSchema: { type: 'object', properties: { from: { type: 'string' } } } },
+    { name: 'weather_at_airport', description: '机场天气', inputSchema: { type: 'object', properties: {} } },
+  ];
+
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      let message = {};
+      try {
+        message = JSON.parse(raw || '{}');
+      } catch {
+        message = {};
+      }
+      seen.push({ method: message.method, headers: req.headers, body: message });
+
+      const send = (payload, sse) => {
+        const headers = { 'Content-Type': sse ? 'text/event-stream' : 'application/json' };
+        if (message.method === 'initialize') headers['Mcp-Session-Id'] = 'sess-1';
+        res.writeHead(200, headers);
+        res.end(sse ? `event: message\ndata: ${JSON.stringify(payload)}\n\n` : JSON.stringify(payload));
+      };
+
+      if (message.method === 'initialize') {
+        send(
+          { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'fake-tripmatch' } } },
+          true
+        );
+        return;
+      }
+      if (message.method === 'notifications/initialized') {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      if (message.method === 'tools/list') {
+        send({ jsonrpc: '2.0', id: message.id, result: { tools } }, false);
+        return;
+      }
+      if (message.method === 'tools/call') {
+        const text = JSON.stringify({ ok: true, tool: message.params && message.params.name, args: message.params && message.params.arguments });
+        send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text }] } }, true);
+        return;
+      }
+      res.writeHead(400);
+      res.end('{}');
+    });
+  });
+
+  return { server, seen, tools };
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +801,78 @@ function runUnitTests() {
         cleanedTable[0].children.join() === 'c1',
       dumped.slice(0, 90)
     );
+
+    // --- MCP 客户端（对着假 MCP 服务测协议层）---
+    const { McpClient, registerMcpTools, parseSseMessages } = require('../src/mcp-client');
+    const mcpFake = createFakeMcpServer();
+    await new Promise((resolve) => mcpFake.server.listen(0, '127.0.0.1', resolve));
+    const mcpPort = mcpFake.server.address().port;
+
+    const mcp = new McpClient({
+      url: `http://127.0.0.1:${mcpPort}/mcp`,
+      apiKey: 'fake-key',
+      name: 'tripmatch',
+    });
+
+    const info = await mcp.initialize();
+    check('MCP：initialize 握手成功并协商版本', info.protocolVersion === '2025-06-18', mcp.protocolVersion);
+    check('MCP：记下了 Mcp-Session-Id', mcp.sessionId === 'sess-1');
+
+    const mcpToolList = await mcp.listTools();
+    check('MCP：tools/list 支持普通 JSON 响应', mcpToolList.length === 3, `实际 ${mcpToolList.length} 个`);
+
+    const mcpRegistry = new ToolRegistry();
+    const regResult = await registerMcpTools(mcpRegistry, mcp, { prefix: 'tripmatch__', allow: ['flight', 'train'] });
+    check(
+      'MCP：按白名单过滤并加前缀注册',
+      regResult.registered.join() === 'tripmatch__flight_search,tripmatch__train_search' &&
+        regResult.total === 3,
+      regResult.registered.join()
+    );
+
+    const mcpOutput = await mcpRegistry.run('tripmatch__flight_search', { from: 'HFE' });
+    check(
+      'MCP：tools/call 走 SSE 并解析成结构化结果',
+      Boolean(mcpOutput && mcpOutput.ok === true && mcpOutput.args.from === 'HFE'),
+      JSON.stringify(mcpOutput)
+    );
+
+    const handshake = mcpFake.seen[0];
+    const afterInit = mcpFake.seen.filter((item) => item.method === 'tools/list')[0];
+    check(
+      'MCP：带上 API Key，后续请求回传 session',
+      handshake.headers['x-api-key'] === 'fake-key' && afterInit.headers['mcp-session-id'] === 'sess-1'
+    );
+
+    check(
+      'MCP：SSE 解析只取 data 帧',
+      parseSseMessages('event: message\ndata: {"a":1}\n\n: keepalive\n\n').length === 1
+    );
+
+    // JSON-RPC 的 error 字段必须冒出来，不能被当成成功
+    const errorHttp = {
+      async post(url, body) {
+        const id = body.id;
+        if (body.method === 'initialize') {
+          return { headers: {}, data: { jsonrpc: '2.0', id, result: { protocolVersion: '2025-06-18' } } };
+        }
+        if (body.method === 'notifications/initialized') {
+          return { headers: {}, data: '' };
+        }
+        return { headers: {}, data: { jsonrpc: '2.0', id, error: { code: -32602, message: 'invalid params' } } };
+      },
+    };
+    const errClient = new McpClient({ url: 'http://x/mcp', name: 'tripmatch', http: errorHttp });
+    await errClient.initialize();
+    let mcpErrorMessage = '';
+    try {
+      await errClient.callTool('flight_search', {});
+    } catch (error) {
+      mcpErrorMessage = error.message;
+    }
+    check('MCP：JSON-RPC error 转成可读错误抛出', /invalid params/.test(mcpErrorMessage), mcpErrorMessage.slice(0, 48));
+
+    mcpFake.server.close();
   })();
 }
 
@@ -754,6 +894,15 @@ async function runE2ETests() {
       health.tools.filter((n) => n === 'weather').length === 1 &&
       health.tools.includes('map_image'),
     (health.tools || []).join(',')
+  );
+
+  check(
+    '启动时自动接入 MCP，且白名单生效',
+    health.mcpLinked === true &&
+      health.tools.includes('tripmatch__flight_search') &&
+      health.tools.includes('tripmatch__train_search') &&
+      !health.tools.includes('tripmatch__weather_at_airport'),
+    (health.tools || []).filter((n) => n.startsWith('tripmatch__')).join(',')
   );
 
   // --- 静态图代理必须验签名 ---
@@ -901,13 +1050,16 @@ async function runE2ETests() {
 (async () => {
   let app = null;
   let failedStart = false;
+  let mcpForApp = null;
 
   try {
     await runUnitTests();
 
     await new Promise((resolve) => mockModel.listen(MOCK_MODEL_PORT, '127.0.0.1', resolve));
     await new Promise((resolve) => mockQWeather.listen(MOCK_QWEATHER_PORT, '127.0.0.1', resolve));
-    console.log(`\n假模型服务 :${MOCK_MODEL_PORT}    假和风服务 :${MOCK_QWEATHER_PORT}`);
+    mcpForApp = createFakeMcpServer();
+    await new Promise((resolve) => mcpForApp.server.listen(MOCK_MCP_PORT, '127.0.0.1', resolve));
+    console.log(`\n假模型服务 :${MOCK_MODEL_PORT}    假和风服务 :${MOCK_QWEATHER_PORT}    假 MCP :${MOCK_MCP_PORT}`);
 
     app = startApp();
     console.log(`被测服务   :${APP_PORT}`);
@@ -924,6 +1076,7 @@ async function runE2ETests() {
     if (app) app.kill();
     mockModel.close();
     mockQWeather.close();
+    if (mcpForApp) mcpForApp.server.close();
   }
 
   const failed = results.filter((r) => !r.ok).length;

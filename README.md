@@ -96,6 +96,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 │   ├── qweather.js      和风天气：实时 / 预报 / 预警（可选，按配置替换高德天气）
 │   ├── static-map.js    静态地图：签名 URL + 服务端代理取图
 │   ├── feishu.js        飞书云文档导出：建文档 → Markdown 转 block → 批量插入
+│   ├── mcp-client.js    MCP 客户端（Streamable HTTP）：握手 / 列工具 / 调工具
 │   ├── tool-registry.js 工具注册表：schema 与 handler 的映射
 │   ├── session.js       会话存储：裁剪、TTL、容量淘汰
 │   ├── security.js      令牌校验 + 限流
@@ -125,6 +126,7 @@ toolCalls[index].function.arguments += call.function.arguments; // 字符串拼�
 | `weather` | 和风 **或** 高德 | 配了 `QWEATHER_API_KEY` + `QWEATHER_BASE_URL` 就和风，否则退回高德实时值 |
 | `map_image` | 高德 | 地点或坐标 → 静态地图 PNG，返回 markdown 图片，前端直接渲染 |
 | `export_to_feishu` | 飞书 | 行程单 → 飞书云文档，返回可分享链接（需配应用凭证） |
+| `tripmatch__*` | 飞常准 MCP | 航班票价 / 铁路余票 / 空铁联运，来自远程 MCP（需配 API Key） |
 
 和风那条路是这样走的（v1 接口，和高德那套"城市名直接查"不同）：
 
@@ -255,6 +257,44 @@ npm run check:feishu
 - `tenant_access_token` 有效期 2 小时，缓存起来复用，提前 60 秒过期。
 - 文档链接 = 调 `drive/v1/metas/batch_query`（`with_url: true`）直接拿飞书返回的真实 URL；
   拿不到才退回 `FEISHU_WEB_ORIGIN` 拼字符串。**不要靠拼域名**——租户域名每人不同，填错就是死链。
+
+---
+
+## 接入 MCP（飞常准 Tripmatch）
+
+项目原本只有手写的 4 个高德工具，缺"交通"这条腿：能告诉你岳麓山在哪、开车怎么走，
+但答不了"下周五合肥到北京，高铁还是飞机划算"。[飞常准 Tripmatch MCP](https://ai.variflight.com/zh/docs/tripmatch)
+补的就是这块（航班实时票价、铁路时刻与余票、空铁联运中转）。
+
+配置只要一行：
+
+```bash
+TRIPMATCH_API_KEY=你的key
+TRIPMATCH_TOOL_ALLOW=flight,train,transfer
+```
+
+### 为什么手写客户端而不用 SDK
+
+`src/mcp-client.js` 只做三件事：握手、列工具、调工具。协议是 JSON-RPC 2.0 上的一层薄壳，
+手写 200 行比拖一棵依赖树更适合这个项目。**协议里有四处容易踩**：
+
+1. **必须先** `initialize` → `notifications/initialized`，之后才能 `tools/list` / `tools/call`；
+2. 响应可能是普通 JSON，也可能是 SSE 流（`text/event-stream`），两种都得解析；
+3. 服务端在响应头给 `Mcp-Session-Id` 时，后续请求必须原样带回去；
+4. `protocolVersion` 要协商，服务端不支持新版会拒，所以代码按 `2025-06-18 → 2025-03-26 → 2024-11-05`
+   依次退让。
+
+### 两个刻意的设计
+
+- **工具加命名空间前缀**：MCP 里也有 `weather_at_airport` 之类，直接并进来会和自家 `weather`
+  撞名，模型就选错数据源。统一注册成 `tripmatch__xxx`，从名字上就分得清。
+- **白名单而不是全量**：MCP 的工具描述通常写得很长，全塞进 prompt 每轮都要付 token。
+  `TRIPMATCH_TOOL_ALLOW` 只放你要的几个；留空才全注册。
+- **接入失败不阻塞启动**：远端挂了就打印一行警告跳过，服务器照常起来，不会因为别人的服务
+  把你的站拖挂。
+
+要接新的 MCP（比如酒店类的），把 `registerMcpTools(registry, client, { prefix, allow })`
+再调一次即可，`Agent` 主循环一行都不用改。
 
 ---
 
@@ -445,6 +485,10 @@ curl -i -X POST https://your-domain.com/api/chat \
 | `FEISHU_SHARE_TO` | 二选一 | — | 文档授权给谁（邮箱或 `openid`），比链接分享多一步但权限更明确 |
 | `FEISHU_SHARE_MEMBER_TYPE` | 否 | `email` | 授权成员类型：`email` / `openid` / `unionid` |
 | `FEISHU_FOLDER_TOKEN` | 否 | — | 指定文件夹，一般留空（tenant token 通常只能指定应用自建文件夹） |
+| `TRIPMATCH_API_KEY` | 否 | — | 飞常准 MCP 的 API Key；不填就不接入 MCP |
+| `TRIPMATCH_MCP_URL` | 否 | 官方端点 | MCP 地址，默认 `https://ai.variflight.com/servers/tripmatch/mcp` |
+| `TRIPMATCH_TOOL_ALLOW` | 否 | 空（全部） | 逗号分隔的关键词白名单，只注册名字含这些词的工具 |
+| `TRIPMATCH_TIMEOUT_MS` | 否 | `10000` | MCP 单次调用超时 |
 | `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
 | `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
 | `RATE_LIMIT_MAX` | 否 | `20` | 每 IP 每窗口最大请求数 |
@@ -546,7 +590,7 @@ npm test
   PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
   PASS  清空只删自己那一个会话  → 2 → 1
   …
-结果：68 通过 / 0 失败
+结果：78 通过 / 0 失败
 ```
 
 ---
@@ -594,6 +638,7 @@ npm test
 - [x] 路线结果带一键导航链接（`amapuri://` + H5 兜底）
 - [x] 静态地图配图（签名 URL + 服务端代理，key 不出服务端）
 - [x] 飞书云文档导出（建文档 → Markdown 转 block → 批量插入 → 授权链接）
+- [x] MCP 客户端（飞常准 Tripmatch：航班票价 / 铁路余票 / 空铁联运）
 - [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
 - [ ] 工具结果加上结构化展示（地图卡片、路线图）
 - [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）

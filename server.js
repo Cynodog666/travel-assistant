@@ -31,6 +31,7 @@ const { QWeatherClient, WEATHER_TOOL } = require('./src/qweather');
 const { ToolRegistry } = require('./src/tool-registry');
 const { createStaticMapService, createMapImageTool, STATICMAP_PATH } = require('./src/static-map');
 const { FeishuClient, createFeishuExportTool } = require('./src/feishu');
+const { McpClient, registerMcpTools } = require('./src/mcp-client');
 const { Agent, AgentAbortError } = require('./src/agent');
 const { SessionStore } = require('./src/session');
 const { createAuthGuard, RateLimiter, createRateLimitMiddleware } = require('./src/security');
@@ -186,6 +187,7 @@ function createApp(config, deps = createDeps(config)) {
       weatherProvider: weatherProviderOf(config),
       tools: registry.names(),
       feishu: Boolean(config.feishuAppId),
+      mcpLinked: Boolean(deps.mcp),
       // 前端用它决定要不要弹令牌输入层；不涉及任何密钥内容
       authRequired: Boolean(config.accessToken),
     });
@@ -370,7 +372,7 @@ function getLanAddresses() {
   return addresses;
 }
 
-function main() {
+async function main() {
   let config;
   try {
     config = loadConfig();
@@ -385,6 +387,28 @@ function main() {
   }
 
   const deps = createDeps(config);
+
+  // 飞常准 Tripmatch MCP：连不上就跳过，绝不因为外部服务拖垮启动
+  if (config.tripMatchApiKey) {
+    const mcp = new McpClient({
+      url: config.tripMatchUrl,
+      apiKey: config.tripMatchApiKey,
+      name: 'tripmatch',
+      timeoutMs: config.tripMatchTimeoutMs,
+    });
+    try {
+      const { registered, total } = await registerMcpTools(deps.registry, mcp, {
+        prefix: config.tripMatchPrefix,
+        allow: config.tripMatchToolAllow,
+      });
+      deps.mcp = mcp;
+      console.log(`[MCP] Tripmatch 已接入：注册 ${registered.length}/${total} 个工具`);
+      console.log(`      ${registered.join(', ')}`);
+    } catch (error) {
+      console.warn(`[MCP] Tripmatch 接入失败，已跳过：${error.message}`);
+    }
+  }
+
   const app = createApp(config, deps);
 
   if (!config.accessToken) {
@@ -441,7 +465,10 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((error) => {
+    console.error('[启动失败]', error && error.stack ? error.stack : error);
+    process.exit(1);
+  });
 }
 
 module.exports = { createApp, createDeps, main };
