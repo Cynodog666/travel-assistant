@@ -1,579 +1,145 @@
 # 坤坤 · 对话式旅行规划助手
 
-> 一个能真正"查数据"而不是"编数据"的旅行 Agent：用 Function Calling 调度高德地图开放平台的
-> 地理编码 / POI 检索 / 路径规划 / 天气四类工具，并通过 SSE 把模型的回答逐字推送到前端。
+> 把「会不会编」的问题，变成「能不能查」的问题：模型先调真实工具拿数据，再基于返回值组织语言。
 
----
+在线演示：<http://8.166.10.252:8080>（访问令牌见 `.env`，也可直接找我索取）
 
-## 这个项目解决什么问题
+直接问模型「长沙岳麓山附近有什么好吃的」，它经常一本正经地编出不存在的地名和门店。
+这个项目里所有事实都来自工具：地址、POI、路线、天气、火车票、航班；查不到就如实说「没查到」。
 
-直接问大模型"长沙岳麓山附近有什么好吃的"，它经常一本正经地编出不存在的地名和门店。
-
-这个项目的做法是：**把"会不会编"的问题，变成"能不能查"的问题**。
-
-模型不再凭记忆回答，而是先调用真实的工具拿到数据，再基于工具返回值组织语言。工具返回空结果或报错时，
-它会如实告诉用户"没查到"，而不是用编造的内容填补。
-
----
-
-## 功能
+## 能做什么
 
 | 能力 | 说明 |
 |---|---|
 | 地址解析 | 中文地址 → 经纬度 + 行政区划编码 |
-| 地点检索 | 按关键词搜酒店 / 餐厅 / 景点，返回名称、地址、坐标、电话 |
-| 路线规划 | 两地点之间的驾车 / 步行路线，含距离、耗时、分段指引 |
-| 实时天气 | 按城市查询当前天气、温度、风力、湿度；配了和风后升级为「实时 + 逐日预报 + 气象预警」 |
-| 一键导航 | 路线规划结果自带高德深链（`amapuri://`）和 H5 链接，点一下直接开始导航 |
-| 地图配图 | `map_image` 工具生成静态地图，回答里直接出图（高德 key 不出服务端） |
-| 导出飞书 | `export_to_feishu` 工具把行程单写成飞书云文档，直接给可分享链接（可选） |
-| 结构化卡片 | 车次/航班/车站直接渲染成卡片，票价余票不经模型转述，避免它漏字段、写错余票 |
-| 多轮对话 | 基于 sessionId 隔离会话，自动裁剪上下文控制 token，闲置超时自动回收 |
+| 地点检索 | 关键词搜酒店 / 餐厅 / 景点，返回名称、地址、坐标、电话 |
+| 路线规划 | 驾车 / 步行 / 公交路线，含距离、耗时、分段指引 |
+| 一键导航 | 结果自带高德深链（`amapuri://`）和 H5 兜底链接 |
+| 实时天气 | 和风（实时 + 逐日 + 预警），未配置时退回高德实时值 |
+| 地图配图 | `map_image` 生成静态地图，key 不出服务端（签名代理） |
+| 火车 / 航班 | 飞常准 MCP 8 个工具：余票、票价、空铁联运、准点率 |
+| 结构化卡片 | 车次 / 航班直接渲染成卡片，数字不经模型转述 |
+| 导出飞书 | `export_to_feishu` 把行程单写成飞书云文档（可选） |
+| 多轮对话 | sessionId 隔离，自动裁剪上下文，闲置回收 |
 | 流式输出 | SSE 逐 token 推送，前端打字机效果 |
-| 接口缓存 | 高德请求走 LRU 缓存，重复查询不打外部接口 |
-| 访问控制 | Bearer 令牌 + 定长比较，前端有令牌输入层；令牌错/缺失一律拒绝 |
-| 限流 | 按 IP 的固定窗口限流，防止被刷爆模型和高德配额 |
-| 断连即停 | 用户关页面立刻中断上游模型请求，不再白跑完整条 Agent 循环 |
-| 行程单导出 | 要求"打印版"时，模型直接输出可保存为 .html 的 A4 规划表 |
-
-### 示例输出
-
-`examples/sample-plan.html` 是模型生成的 A4 行程单样例，浏览器直接打开可以看打印效果
-（里面的地点和价格为示例数据，不是实时查询结果）。
-
----
+| 访问控制 | Bearer 令牌（定长比较）+ 按 IP 限流 + 断连即停 |
 
 ## 架构
 
 ```
-┌──────────────────┐   POST /api/chat/stream   ┌──────────────────────────────────────┐
-│     浏览器       │ ────────────────────────► │  Express                             │
-│ public/index.html│ ◄──────────────────────── │                                      │
-└──────────────────┘   SSE: delta / done       │  ① 响应头 + 静态（只托管 public/）    │
-                                              │  ② Bearer 令牌校验 → 401/403         │
-                                              │  ③ 按 IP 限流 → 429                  │
-                                              │  ④ Agent 循环 (最多 5 轮)            │
-                                              │      streamChatCompletion()          │
-                                              │        ↓ 流式读取 tool_calls 增量    │
-                                              │      有工具调用？                    │
-                                              │        ├─ 是 → amap.run() → 回填     │
-                                              │        └─ 否 → 返回最终回答          │
-                                              └───────────────┬──────────────────────┘
-                                                              │
-                                       ┌──────────────────────▼───────────────────┐
-                                       │  高德开放平台 Web 服务 API               │
-                                       │  geocode / place / direction / weather   │
-                                       └──────────────────────────────────────────┘
+浏览器（public/，原生 JS，无构建步骤）
+   │  POST /api/chat/stream        ▲ SSE: session / card / delta / done
+   ▼                               │
+Express ── 令牌校验 → 限流 → Agent 循环（≤ 5 轮工具调用）
+                                ├─ 高德：geocode / poi_search / route_planning / weather
+                                ├─ 和风天气（可选，替换高德天气）
+                                ├─ 静态地图（HMAC 签名代理，key 不下发）
+                                ├─ 飞常准 MCP（8 个火车 / 航班工具，按需加载）
+                                └─ 飞书云文档导出（可选）
 ```
 
-### Agent 循环的关键点
+两个实现上的要点：
 
-模型在流式返回时，`tool_calls` 是**分片到达**的：第一片只有 `id` 和 `name`，后续片不断追加
-`arguments` 的字符串片段。所以不能直接 `JSON.parse`，必须按 `index` 把同名分片累加起来，
-等整个流结束才是完整的 JSON。
-
-```js
-// 按 index 归并分片
-const index = call.index ?? 0;
-toolCalls[index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
-toolCalls[index].function.arguments += call.function.arguments; // 字符串拼接，不是覆盖
-```
-
-这一步是这类项目最容易写错的地方，也是面试常问的点。`name` 同理——有的服务会把它也拆成
-`"wea"` + `"ther"` 两片，直接赋值就会拿到一个不存在的工具名。
-
----
+- **流式 `tool_calls` 是分片到达的**：首片只有 `id` / `name`，`arguments` 是不断追加的字符串，`name` 还可能被拆成两片。所以按 `index` 累加，等流结束再统一 `JSON.parse` 并回填 `tool_call_id`。
+- **工具按需加载（skill 包）**：工具涨到 15 个后，每轮全量下发 schema 约 4735 tokens，实测每轮浪费约 3800。改成基线 7 个工具 + 一个 `use_skill`，模型要查火车 / 航班时才加载整包；skill 是会话级的，同一会话不会重复加载。
 
 ## 目录结构
 
 ```
 .
-├── server.js            服务入口：路由、鉴权、限流、SSE、生命周期
+├── server.js            entry point: routes, auth, rate limit, SSE, lifecycle
 ├── src/
-│   ├── config.js        环境变量集中读取与校验
-│   ├── agent.js         Agent 循环 + 流式 tool_calls 归并 + 中断/超时
-│   ├── amap.js          高德四类工具与缓存
-│   ├── amap-uri.js      高德 URI：把路线变成可点击的导航链接
-│   ├── qweather.js      和风天气：实时 / 预报 / 预警（可选，按配置替换高德天气）
-│   ├── static-map.js    静态地图：签名 URL + 服务端代理取图
-│   ├── feishu.js        飞书云文档导出：建文档 → Markdown 转 block → 批量插入
-│   ├── mcp-client.js    MCP 客户端（Streamable HTTP）：握手 / 列工具 / 调工具
-│   ├── ui-cards.js      工具结果 → 前端卡片（车次/航班/车站）
-│   ├── py-literal.js    Python 字面量解析（MCP 返回的是 repr 字符串，不是 JSON）
-│   ├── tool-registry.js 工具注册表：schema 与 handler 的映射
-│   ├── session.js       会话存储：裁剪、TTL、容量淘汰
-│   ├── security.js      令牌校验 + 限流
-│   └── lru-cache.js     LRU 缓存
-├── public/              唯一对外托管的目录
-│   ├── index.html       页面结构 + 样式
-│   └── app.js           令牌管理 / SSE 解析 / 导出（无构建步骤）
-├── test/smoke.js        单元 + 端到端测试，不依赖外网
-└── examples/            模型生成的行程单样例
+│   ├── config.js        env loading & validation
+│   ├── agent.js         agent loop, streaming tool_calls merge, abort / timeout
+│   ├── amap.js          four AMap tools + LRU cache
+│   ├── amap-uri.js      AMap deep links (amapuri:// and web fallback)
+│   ├── qweather.js      QWeather: current / daily / alerts
+│   ├── static-map.js    signed static-map proxy (key stays server-side)
+│   ├── feishu.js        Feishu doc export: create → convert → batch insert
+│   ├── mcp-client.js    MCP client over Streamable HTTP: init / list / call
+│   ├── ui-cards.js      tool results → front-end cards (train / flight)
+│   ├── py-literal.js    Python literal parser (MCP returns repr, not JSON)
+│   ├── tool-registry.js tool schema <-> handler mapping
+│   ├── tool-skills.js   skill packs: baseline tools + on-demand loading
+│   ├── tripmatch-format.js  normalize MCP results before the model sees them
+│   ├── train-types.js   train type by 12306 prefix (G / D / Z / V ...)
+│   ├── session.js       session store: trimming, TTL, eviction
+│   ├── security.js      bearer token check + fixed-window rate limit
+│   └── lru-cache.js     small LRU cache
+├── public/              the only directory served to the outside
+│   ├── index.html       page structure and styles
+│   └── app.js           token storage / SSE parsing / export
+├── test/smoke.js        offline unit + end-to-end tests
+└── examples/            sample generated itinerary
 ```
 
-**重要**：`express.static` 只指向 `public/`。以前它指向项目根目录，`/server.js`、`/package.json`、
-旧备份目录里的源码都能被直接下载，其中还躺着一把明文密钥——这个坑下面还会再提一次。
-
----
-
-## 工具与天气实现
-
-交给模型的工具由 `src/tool-registry.js` 组装，**同名工具只允许有一个**，避免模型在两个都能
-"查天气"的工具之间摇骰子：
-
-| 工具 | 来源 | 说明 |
-|---|---|---|
-| `geocode` | 高德 | 地址 → 经纬度 + adcode |
-| `poi_search` | 高德 | 关键词搜地点 |
-| `route_planning` | 高德 | 路线 + **导航链接**（appLink / webLink） |
-| `weather` | 和风 **或** 高德 | 配了 `QWEATHER_API_KEY` + `QWEATHER_BASE_URL` 就和风，否则退回高德实时值 |
-| `map_image` | 高德 | 地点或坐标 → 静态地图 PNG，返回 markdown 图片，前端直接渲染 |
-| `export_to_feishu` | 飞书 | 行程单 → 飞书云文档，返回可分享链接（需配应用凭证） |
-| `tripmatch__*` | 飞常准 MCP | 航班票价 / 铁路余票 / 空铁联运，来自远程 MCP（需配 API Key） |
-| `use_skill` | 内置 | 按需加载工具包（当前只有 `tripmatch`），基线里只占一个 schema |
-
-和风那条路是这样走的（v1 接口，和高德那套"城市名直接查"不同）：
-
-```
-城市名 ──/geo/v2/city/lookup──► 经纬度 + LocationID
-                                     │
-        ┌────────────────────────────┼────────────────────────────┐
-        ▼                            ▼                            ▼
-  /weather/v1/current      /weather/v1/daily          /weatheralert/v1/current
-  实时（温度/体感/风/UV）    逐日预报（1-10 天）          正在生效的气象预警
-```
-
-几个实现上的选择：
-
-- **实时数据必须成功，预报和预警允许失败**。预报挂了只记 `forecastError`，预警挂了记
-  `alertsError`，别让一个次要接口把整个天气查询变成报错。
-- **字段做了裁剪和单位统一**（℃ / % / mm），原始响应字段太多，直接塞给模型既费 token
-  又容易读错。
-- **鉴权走 `X-QW-Api-Key` 头**，不用 JWT——和风两种方式不能混用，API KEY 更简单。
-  注意 2027 年起和风会对 API KEY 的每日请求量做限制，届时再换 JWT（Ed25519 签名）。
-- **只用和风自己的经纬度**，不把高德的 GCJ-02 坐标传过去，省掉坐标系偏移那一堆事。
-
-`route_planning` 返回的链接长这样（`t=0` 驾车、`t=1` 公交、`t=2` 步行、`t=3` 骑行）：
-
-```
-appLink: amapuri://route/plan/?slat=39.909&slon=116.397&sname=天安门&...
-webLink: https://uri.amap.com/navigation?from=116.397,39.909,天安门&to=...&mode=car
-```
-
-`appLink` 只有装了高德 App 的手机能唤醒，`webLink` 是万能的 H5 兜底，所以两个都给。
-前端 `renderMarkdown` 会把裸链接转成可点的 `<a>`，否则手机上根本点不动。
-
-### 静态地图为什么走签名代理
-
-高德静态图接口的 URL 里带 `key`。如果把原始 URL 直接返回给前端，key 就白纸黑字躺在
-页面源码和聊天记录里了——这和之前"静态目录泄露源码"是同一类错误，只是更隐蔽。
-
-所以流程改成：
-
-```
-map_image 工具 ──► 服务端用 HMAC 签一个 /api/staticmap?location=...&exp=...&sig=...
-                            │
-浏览器 <img src=...> ───────┘   （img 请求带不了 Authorization 头，签名就代替了它）
-                            ▼
-                  校验 sig + exp → 带着 key 去高德取图 → 直接把 PNG 流回去
-```
-
-几个细节：
-
-- 签名串是「排序后的查询参数 + exp」，`exp` 和 `sig` 本身不参与计算，否则校验时会把 `exp` 拼两遍。
-- 参数只要被改一个字节（比如把 `zoom` 从 14 改成 15），签名就对不上 → 403。所以服务端可以放心
-  信任这些参数，不需要再做一堆入参校验。
-- 有效期默认 1 小时。注意：**导出的 .html 行程单里如果嵌了地图，1 小时后图会失效**，
-  要长期保存需要在导出时把图片转成 base64 内联。
-- 400/500 时高德返回的是 JSON 而不是图片，代理会识别出来转成 502，而不是把一段 JSON 当 PNG 吐给浏览器。
-
----
-
-## 导出到飞书（可选）
-
-配好之后，用户说"把这行程导出到飞书"，模型会调用 `export_to_feishu`，拿回一条可分享的文档链接。
-
-### 开通步骤
-
-1. 打开 [飞书开发者后台](https://open.feishu.cn/app)，**创建企业自建应用**，名字随便（比如 `旅行助手`）
-2. 左侧「凭证与基础信息」，记下 **App ID** 和 **App Secret**
-3. 左侧「权限管理」，搜索并开通这四个（后台显示的是中文名）：
-   - **创建及编辑新版文档**（`docx:document`）
-   - **文本内容转换为云文档块**（Markdown 转 block 用的）
-   - **云文档权限**（把文档授权/设链接分享用的）
-   - **查看云空间元数据**（`drive:drive.metadata:readonly`，取文档真实链接用的；找不到就先跳过，
-     链接会退回用 `FEISHU_WEB_ORIGIN` 拼，拼错就是死链）
-4. 左侧「版本管理与发布」→ **创建版本** → 提交发布。企业版需要管理员审核，个人版一般直接通过
-5. 在浏览器打开飞书，地址栏形如 `https://yourname.feishu.cn` —— 这串就是 `FEISHU_WEB_ORIGIN`
-6. 把值填进 `.env`。**你不需要知道自己的邮箱，也不需要填租户域名**：
-
-```bash
-FEISHU_APP_ID=cli_xxxxxxxx
-FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx
-# 互联网上拿到链接就能看（适合"把链接发给别人"）
-FEISHU_LINK_SHARE=anyone_readable
-```
-
-如果只想让公司内部的人看，改成 `tenant_readable`。想精确指定某个人，就用
-`FEISHU_SHARE_TO=你的邮箱`（或 `openid`），不设 `FEISHU_LINK_SHARE` 也行。
-
-`FEISHU_WEB_ORIGIN` 现在是**可选的兜底值**：开通了「查看云空间元数据」之后，文档链接是直接问
-飞书要的，不需要你拼域名。（早期版本靠拼域名，结果填成 `https://open.feishu.cn` 就是一条死链。）
-
-7. 重启服务，`/api/health` 里应该出现 `"feishu": true` 和 `export_to_feishu` 工具
-
-### 为什么还要授权/分享
-
-用 `tenant_access_token` 创建的文档**归属方是"应用"**，不是"你"。不分享的话，文档建成功了你也打不开——
-这是飞书的身份模型，不是 bug。所以创建完会做两件事（配了哪个做哪个）：
-
-- `FEISHU_LINK_SHARE` → 调 `PATCH /drive/v1/permissions/{id}/public` 设置链接分享；
-- `FEISHU_SHARE_TO` → 调 `POST /drive/v1/permissions/{id}/members` 把你加成 `full_access` 协作者。
-
-两个都失败也不影响文档已经建好，返回结果里会带 `shareError` 说明原因。授权那步报权限错误，
-通常是缺「云文档权限」这个 scope，回第 3 步补上再发布一次版本。
-
-### 文档排版
-
-纯 Markdown 转出来的文档只有标题、列表、表格，看着像说明书。所以导出后会再做一层装饰：
-
-| 元素 | 作用 |
-|---|---|
-| 高亮块（callout + 💡） | 文首一张「卡片」：一句话概览 + 2-4 条关键信息（日期/天气/住宿/提醒），首行加粗 |
-| 分割线（divider） | 每个 `##` 章节之间加一条，段落才有呼吸感；**标题前已有原生分割线就跳过**，不然会挨着两条 |
-| 文末引用块（quote） | 生成时间 + 数据来源署名（高德 / 和风 / 飞常准） |
-
-模型侧也要配合，所以 `export_to_feishu` 多了两个参数，并在提示词里约定版式：
-
-- `summary`：一句话概览（进高亮块）
-- `highlights`：2-4 条关键信息（进高亮块）
-- markdown 里用带 emoji 的 `##` 小标题（`## 📅 Day 1 · 12/04 · 多云`）、信息用列表承载、
-  **表格最多 1-2 个**、重要提醒以 ⚠️ 单独成段
-
-改完后的实测文档：1 个高亮块、5 条分割线、6 个 emoji 标题、20 个列表项、**1 个表格**
-（改造前是一屏表格）。
-
-> 想往文档里嵌图片（比如静态地图）还需要 `docs:document.media:upload` 权限，
-> 流程是「创建 image block → 上传素材(multias/upload_all) → 批量更新块 replace_image」。
-> 当前没开这个权限，所以图片只在网页对话里显示，不写进文档。
-
-### 自检与排障
-
-配好之后先跑一次自检，比自己猜快得多：
-
-```bash
-npm run check:feishu
-```
-
-它会按「取 token → 建文档 → Markdown 转 block → 批量插入 → 分享」一步步跑，哪步失败就说哪步。
-它会在你的飞书里建一篇标题带「可删除」的测试文档，验完可以直接删。
-
-| 现象 | 原因 |
-|---|---|
-| `21001 Access denied due to platform policy` | 应用还没生效。按顺序查：① 「版本管理与发布」里版本是不是**已发布/已上线**（只存草稿或审核中都会报这个）；② 企业版要管理员在 `admin.feishu.cn` 审核并**启用**应用；③ 「安全设置」里如果开了 IP 白名单，漏了服务器出口 IP；④ 确认是「企业自建应用」而不是商店/网页应用 |
-| `1770040 / 1770032` | 缺云文档权限，或应用没被加进目标文件夹的协作者 |
-| `1770006 schema mismatch` | block 里带了只读字段（`merge_info` 等），或父子关系不对——本仓库已处理，出现说明被改坏了 |
-| 文档建成功但打不开 | 没设 `FEISHU_LINK_SHARE` 也没设 `FEISHU_SHARE_TO`，文档只在应用名下 |
-| 链接里是 `yourname` | `FEISHU_WEB_ORIGIN` 还是示例值，换成你自己的租户域名（浏览器地址栏里那串） |
-
-### 实现上的几个细节
-
-- 走官方三段式：**建空文档 → `blocks/convert` 把 Markdown 转 block → `descendant` 批量插入**。
-  自己拼 block 会踩表格和嵌套列表的坑，没必要。
-- 表格 block 里的 `merge_info` 是只读字段，回插前必须删掉，否则报 `1770006 schema mismatch`。
-- 单次最多插 1000 个 block，代码按「每次 50 个一级块」分批，超了自动拆请求。
-- `tenant_access_token` 有效期 2 小时，缓存起来复用，提前 60 秒过期。
-- 文档链接 = 调 `drive/v1/metas/batch_query`（`with_url: true`）直接拿飞书返回的真实 URL；
-  拿不到才退回 `FEISHU_WEB_ORIGIN` 拼字符串。**不要靠拼域名**——租户域名每人不同，填错就是死链。
-
----
-
-## 接入 MCP（飞常准 Tripmatch）
-
-项目原本只有手写的 4 个高德工具，缺"交通"这条腿：能告诉你岳麓山在哪、开车怎么走，
-但答不了"下周五合肥到北京，高铁还是飞机划算"。[飞常准 Tripmatch MCP](https://ai.variflight.com/zh/docs/tripmatch)
-补的就是这块（航班实时票价、铁路时刻与余票、空铁联运中转）。
-
-配置只要一行：
-
-```bash
-TRIPMATCH_API_KEY=你的key
-TRIPMATCH_TOOL_ALLOW=flight,train,transfer
-```
-
-### 接进来之后是什么样
-
-飞常准服务端一共给 9 个工具，本仓库默认只注册其中 8 个：
-
-| 工具 | 用途 | 默认注册 |
-|---|---|---|
-| `searchTrainTickets` | 火车票余票/票价 | ✅ |
-| `searchTrainStations` | 车站查询 | ✅ |
-| `searchFlightsByDepArr` | 按城市/机场查航班 | ✅ |
-| `searchFlightsByNumber` | 按航班号查 | ✅ |
-| `getFlightPriceByCities` | 城市间机票价格 | ✅ |
-| `getFlightAndTrainTransferInfo` | 空铁联运中转方案 | ✅ |
-| `flightHappinessIndex` | 航班准点/舒适度对比 | ✅ |
-| `getTodayDate` | 取今天日期 | ✅（工具描述明确要求"查日期必须调它，别自己编"） |
-| `getFutureWeatherByAirport` | 机场天气 | ❌ 故意不注册：和自家的 `weather`（和风）重复，两个天气工具会让模型选错数据源 |
-
-实测一轮「下周五合肥去北京，对比高铁和飞机，预算 800」会依次用到
-`getTodayDate` → `searchTrainTickets` → `searchFlightsByDepArr` → `getFlightPriceByCities` → `weather`，
-最后给出含车次/航班/票价/税费/余票的对比表——这些数字全部来自真实接口，没有一个靠模型编。
-
-### 为什么手写客户端而不用 SDK
-
-`src/mcp-client.js` 只做三件事：握手、列工具、调工具。协议是 JSON-RPC 2.0 上的一层薄壳，
-手写 200 行比拖一棵依赖树更适合这个项目。**协议里有四处容易踩**：
-
-1. **必须先** `initialize` → `notifications/initialized`，之后才能 `tools/list` / `tools/call`；
-2. 响应可能是普通 JSON，也可能是 SSE 流（`text/event-stream`），两种都得解析；
-3. 服务端在响应头给 `Mcp-Session-Id` 时，后续请求必须原样带回去；
-4. `protocolVersion` 要协商，服务端不支持新版会拒，所以代码按 `2025-06-18 → 2025-03-26 → 2024-11-05`
-   依次退让。
-
-### 两个刻意的设计
-
-- **工具加命名空间前缀**：MCP 里也有 `weather_at_airport` 之类，直接并进来会和自家 `weather`
-  撞名，模型就选错数据源。统一注册成 `tripmatch__xxx`，从名字上就分得清。
-- **白名单而不是全量**：MCP 的工具描述通常写得很长，全塞进 prompt 每轮都要付 token。
-  `TRIPMATCH_TOOL_ALLOW` 只放你要的几个；留空才全注册。
-- **接入失败不阻塞启动**：远端挂了就打印一行警告跳过，服务器照常起来，不会因为别人的服务
-  把你的站拖挂。
-
-要接新的 MCP（比如酒店类的），把 `registerMcpTools(registry, client, { prefix, allow })`
-再调一次即可，`Agent` 主循环一行都不用改。
-
----
-
-## 工具结果渲染成卡片
-
-一开始是让模型把车次/航班自己排版成 Markdown 表格。实测问题很明显：它会漏字段、把"已售罄"
-写成有票、把 5h54m 算成 6 小时，而且同一个问题问两次排版还不一样。
-
-所以改成**结构化数据不经过模型**：
-
-```
-MCP tools/call ──► Agent.onToolResult ──► buildUiCard() ──► SSE event: card ──► 前端渲染
-                                                                              │
-                                        模型只拿文字结论 ◄────────────────────┘
-```
-
-### 三个关键决定
-
-**1. 卡片在正文之前下发。** 工具一返回就推 `card` 事件，前端把它插进对话流并把当前气泡"断开"
-（下一个 `delta` 另起一个气泡），于是顺序自然是「卡片 → 模型的结论」，不会出现结论在上、卡片在下。
-
-**2. 模型只给结论，不复述明细。** 系统提示词里写明：车次/航班列表由界面渲染成卡片，
-你只给取舍建议和提醒。实测回复从 1500+ 字降到 560 字，且不再出现 Markdown 表格。
-
-**3. 只有"列表型"结果才生成卡片。** 坐标、天气对象这类返回 `null`，交给模型用文字表达——
-硬套一个卡片模板反而更难看。
-
-### 一个必须踩的坑：返回值不是 JSON
-飞常准 MCP 的 `tools/call` 返回的是 **Python `repr()` 字符串**：
-
-```
-Train tickets: {'code': 200, 'data': [{'trainNumber': 'G52', 'seatLists': [{'seatPrice': 473.5}]}]}
-```
-
-直接 `JSON.parse` 会炸，用正则把单引号替换成双引号又会把文本里的撇号改坏。
-所以写了 [`src/py-literal.js`](src/py-literal.js)：一个确定性的递归下降解析器，支持
-单/双引号、嵌套 dict/list、`True`/`False`/`None`、`\uXXXX` 转义，40 行代码 + 单测。
-
-`src/ui-cards.js` 的顺序是：去前缀 → JSON 试一次 → 失败再走 Python 字面量 → 按字段特征
-（`trainNumber` / `FlightNo` / `station_name`）识别是哪类列表 → 生成卡片对象。
-服务端用 `error_code: 10` 表达"查到了但没有数据"，这种不生成空卡片。
-
-### 车次类型：模型会自己猜，而且猜错
-
-飞常准返回的 `trainNumber` 只有车次号（`G52` / `Z227` / `V1036`），**没有"车次类型"字段**。
-不处理的话模型只能靠前缀猜，实测它把 `V1036`、`V1072` 这种普速夜车也说成"高铁"，
-还会说出"高铁卧铺"这种不存在的东西。
-
-所以补了 [`src/train-types.js`](src/train-types.js)，按 12306 规则确定性判定：
-
-| 前缀 | 判定 |
-|---|---|
-| `G` 高铁 · `C` 城际 · `D` 动车 · `S` 市域 | 高铁/动车 |
-| `Z` 直达特快 · `T` 特快 · `K` 快速 · `Y` 旅游 · `L` 临客 · `V` 普速 | 普速 |
-| 纯数字 | 普快 |
-
-判定结果同时用在两处：卡片上的小标签（高铁橙色、普速灰色），以及
-[`src/tripmatch-format.js`](src/tripmatch-format.js) 在**交给模型前**把结果规范化成
-`{ trainType, highSpeed, duration, seats }` —— 顺带砍掉时间戳、电报码这些用不上的字段。
-
-同一处还顺手修了一个错：模型会用「到达时间 − 出发时间」自己算时长，跨天时算错
-（把 3h37m 算成 2h17m）。所以规范化结果里直接给成品 `duration`（`3h37m`），
-并在提示词里禁止它自己算。
-
-> 卡片底部的类型统计基于**全部**车次而不是切片后的前 12 行，否则会得出
-> "全部为高铁/动车"这种误导结论（实际 37 条里 9 条是普速）。
-
----
-
-## 按需加载工具（skill 包）
-
-接完 MCP 之后工具涨到 15 个，**每轮对话都要把 15 份 JSON Schema 塞进 prompt**——其中 8 个是
-火车票/航班，而绝大多数对话根本用不到。实测这部分占了约 3800 tokens/轮。
-
-所以加了「工具 skill 包」：把一组工具收进一个包里，基线只暴露核心工具 + 一个 `use_skill`，
-模型真需要时才加载。
-
-```
-基线（每轮都发）: geocode, poi_search, route_planning, weather, map_image, export_to_feishu, use_skill
-skill 包（按需） : tripmatch → 8 个火车/航班工具
-```
-
-| | tools JSON | 估算 tokens |
-|---|---|---|
-| 全量 15 个 | 10,417 字符 | ≈ 4,735 |
-| 基线 7 个 | 2,027 字符 | ≈ 921 |
-| **每轮省** | **8,390 字符** | **≈ 3,814** |
-
-### 怎么工作的
-
-1. 会话对象上有个 `activeSkills: Set`，记录这个会话加载过哪些包里的工具；
-2. `Agent` 每轮调 `getTools(sessionId)` **重新算** tools 列表（基线 + 已加载），
-   所以模型刚调完 `use_skill`，下一轮立刻就能看到新工具；
-3. `use_skill({skill:"tripmatch"})` 把整包工具名写进当前会话，返回可用工具清单；
-4. skill 是**会话级**的：同一会话里第二次问航班不需要重复加载，换会话则重新加载。
-
-实测一轮「12月4日合肥到北京的火车票」：模型先 `use_skill` → 再查票 → 出卡片；
-紧接着问「同一天的航班」，直接调航班工具，没有第二次 `use_skill`。
-
-### 为什么不是"把工具描述写短"
-
-那是省不出量级的：描述写短了模型选错工具，反而更贵。真正贵的是**不相关的工具也每轮都在
-prompt 里**。skill 包解决的是"不该出现的东西不出现"，而不是"出现了但变短"。
-
-### 一个实现上的坑
-
-`SkillCatalog` 必须在**所有工具注册完之后**才能算。MCP 工具是 `main()` 里异步注册的，
-如果在 `createDeps()` 里提前算，会得到一个空目录，`use_skill` 永远不会出现——
-这个 bug 测试直接抓到了（基线路由里没有 `use_skill`）。所以拆出了 `applyToolSkills(deps)`，
-在 MCP 注册之后再调用。
-
----
-
-## 技术栈
-
-- **后端**：Node.js 18+ / Express 5
-- **模型**：任意兼容 OpenAI Chat Completions 协议的服务（OpenAI、通义、DeepSeek 等）
-- **地图**：高德开放平台 Web 服务 API
-- **前端**：原生 HTML / CSS / JS，无构建步骤，无外部字体和 CDN 依赖
-- **传输**：SSE（Server-Sent Events）
-
----
+`express.static` 只指向 `public/`：源码、`.env`、备份目录一律 404。
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
 npm install
-
-# 2. 配置密钥
-copy .env.example .env     # Windows
-# cp .env.example .env     # macOS / Linux
-
-# 3. 编辑 .env，填入 AI_API_KEY 和 AMAP_KEY
-# 4. 如果要对公网开放，再生成并填入 ACCESS_TOKEN：
-npm run gen-token
-
-# 5. 启动
+cp .env.example .env        # Windows: copy .env.example .env
+# 填入 AI_API_KEY 与 AMAP_KEY
+npm run gen-token           # 生成 ACCESS_TOKEN（对公网才需要）
 npm start
 ```
 
-打开 http://localhost:3000/index.html
+打开 <http://localhost:3000/index.html>。
 
-### 密钥申请
-
-| 密钥 | 获取地址 | 说明 |
+| 密钥 | 获取地址 | 备注 |
 |---|---|---|
-| `AMAP_KEY` | https://console.amap.com/dev/key/app | 新建应用时选 **Web服务** 类型，不要选 Web端(JS API) |
-| `AI_API_KEY` | 取决于你用哪家模型 | 需要支持 `tools` 参数 |
+| `AMAP_KEY` | <https://console.amap.com/dev/key/app> | 必须选 **Web 服务**，不要选 Web 端（JS API） |
+| `AI_API_KEY` | 取决于用的模型服务 | 需要支持 `tools` 参数 |
 
----
+## 环境变量
 
-## 访问控制
+核心几项，完整清单见 `.env.example`：
 
-接口默认要求令牌，三种传法任选其一：
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PORT` | `3000` | 服务端口 |
+| `NODE_ENV` | `development` | `production` 下强制要求 `ACCESS_TOKEN` |
+| `AI_API_URL` / `AI_API_KEY` / `AI_MODEL` | — | 兼容 OpenAI 协议的任意端点，需支持 Function Calling |
+| `AMAP_KEY` | — | 高德 Web 服务密钥（必填） |
+| `QWEATHER_API_KEY` / `QWEATHER_BASE_URL` | — | 和风密钥与控制台分给你的 API Host，不填就用高德天气 |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | — | 填了才注册飞书导出工具 |
+| `TRIPMATCH_API_KEY` | — | 飞常准 MCP Key，填了才接入火车 / 航班 |
+| `TRIPMATCH_TOOL_ALLOW` | 空（全部） | 逗号分隔白名单，只注册需要的 MCP 工具 |
+| `ACCESS_TOKEN` | 空（不鉴权） | 公网必填，`npm run gen-token` 可生成 |
+| `TRUST_PROXY` | `false` | 在 Nginx / 云厂商反代后面必须开，否则限流会算成同一个 IP |
 
-```
-Authorization: Bearer <ACCESS_TOKEN>
-x-access-token: <ACCESS_TOKEN>
-```
+## 接口
 
-浏览器端不需要手动拼——`public/app.js` 里统一由 `apiFetch()` 注入，本地存在
-`localStorage.travelAccessToken`。首次打开时前端会请求一次 `/api/health`，
-若服务端声明 `authRequired: true` 且本地没令牌，就会先弹令牌输入层。
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| `POST` | `/api/chat/stream` | 是 | SSE 流式对话 |
+| `POST` | `/api/chat` | 是 | 非流式，返回 `{ reply, sessionId }` |
+| `POST` | `/api/clear-history` | 是 | 清空指定会话（`sessionId` 必填） |
+| `GET` | `/api/health` | 否 | 会话数、缓存、工具列表、是否需要令牌 |
+| `GET` | `/api/staticmap` | HMAC 签名 | 静态地图代理，给 `<img>` 用 |
 
-| 状态码 | 含义 |
-|---|---|
-| `401` | 没带令牌（`TOKEN_MISSING`） |
-| `403` | 令牌不对（`TOKEN_INVALID`） |
-| `429` | 触发限流，响应带 `Retry-After` |
+令牌两种传法：`Authorization: Bearer <token>`、`x-access-token: <token>`（前端 `apiFetch()` 自动注入）。
+错误码：`401` 缺令牌、`403` 令牌错、`429` 触限流（带 `Retry-After`）。
 
-`ACCESS_TOKEN` 留空等于关闭鉴权，**只适合本机自用**；`NODE_ENV=production` 且没设令牌时
-进程会直接拒绝启动，避免一个手滑就把额度公开出去。
-
----
-
-## 手机访问
-
-前端全部使用相对路径（`/api/chat/stream`、`/api/clear-history`），所以手机只要连到这台电脑，
-打开局域网地址就能用，不需要改任何代码。
-
-1. 手机和电脑连**同一个 Wi-Fi**（手机别用流量）
-2. `npm start`，终端会直接打印可用地址：
+SSE 事件：
 
 ```
-服务器已启动，模型: deepseek-chat
-访问令牌: 已启用
-限流: 20 次 / 60 秒 / IP
-本机访问:   http://localhost:3000/index.html
-
-局域网访问（手机与电脑连同一个 Wi-Fi）:
-  http://192.168.1.7:3000/index.html
+event: session   data: {"sessionId":"abc123"}
+event: card      data: {"type":"train-list","title":"火车票","rows":[...]}
+event: delta     data: {"content":"岳"}
+event: done      data: {"sessionId":"abc123","content":"完整回答"}
+event: error     data: {"message":"错误原因"}
 ```
 
-3. 手机浏览器打开那个 `192.168.x.x` 的地址，输入 `ACCESS_TOKEN` 即可
+## 部署
 
-### 手机打不开怎么办
-
-按顺序排查：
-
-| 现象 | 处理 |
-|---|---|
-| 手机白屏 / 转圈超时 | Windows 防火墙拦了。管理员 PowerShell 执行：`netsh advfirewall firewall add rule name="travel-assistant" dir=in action=allow protocol=TCP localport=3000` |
-| 手机能开页面，但发消息没反应 | 说明静态文件通了但接口没通，先确认 `/api/health` 能返回 JSON |
-| 一直提示令牌不正确 | 手机浏览器缓存了旧令牌，清一下站点数据或换个浏览器 |
-| 地址正确但连不上 | 很多公司/学校 Wi-Fi 开了「AP 隔离」，设备之间不能互访，换手机热点试 |
-
----
-
-## 部署到公网
-
-最小可用组合：`ACCESS_TOKEN` + `TRUST_PROXY=true` + Nginx 关缓冲。
-
-### 1. 环境变量（必须）
-
-```bash
-NODE_ENV=production
-ACCESS_TOKEN=<用 npm run gen-token 生成>
-TRUST_PROXY=true          # 在 Nginx / Railway / Render 后面就要开
-```
-
-- 不设 `ACCESS_TOKEN`：`production` 下直接启动失败（这是故意的）。
-- 不开 `TRUST_PROXY`：所有请求的 `req.ip` 都是反代的地址，限流会变成"全体用户共用一个额度"。
-
-### 2. Nginx 反代
+最小组合：`NODE_ENV=production` + `ACCESS_TOKEN` + `TRUST_PROXY=true` + Nginx 关缓冲。
 
 ```nginx
 server {
     listen 80;
     server_name your-domain.com;
-
     location / {
         proxy_pass         http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -581,9 +147,7 @@ server {
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
-
-        # SSE 关键：不缓冲、不压缩、长连接
-        proxy_buffering    off;
+        proxy_buffering    off;   # SSE 必须关，否则看不到逐字效果
         proxy_cache        off;
         proxy_read_timeout 300s;
         gzip               off;
@@ -591,130 +155,12 @@ server {
 }
 ```
 
-代码里已经带了 `X-Accel-Buffering: no` 和 `Cache-Control: no-transform`，但把
-`proxy_buffering off` 写进配置更保险——否则正文会攒够一波才吐出来，看不到逐字效果。
-
-### 3. 进程守护
-
 ```bash
 npm install -g pm2
 pm2 start server.js --name travel-assistant
-pm2 logs travel-assistant
 ```
 
-`SIGINT` / `SIGTERM` 会优雅关闭：先停止接受新连接，5 秒内没退干净再强退。
-
-### 4. 上线后自查
-
-```bash
-curl -i https://your-domain.com/api/health          # 200 + "authRequired": true
-curl -i https://your-domain.com/server.js           # 必须 404
-curl -i https://your-domain.com/.env                # 必须 404
-curl -i -X POST https://your-domain.com/api/chat \
-     -H 'Content-Type: application/json' \
-     -d '{"message":"长沙天气","sessionId":"selfcheck-001"}'   # 必须 401
-```
-
----
-
-## 环境变量
-
-| 变量 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `PORT` | 否 | `3000` | 服务端口 |
-| `NODE_ENV` | 否 | `development` | `production` 时强制要求 `ACCESS_TOKEN` |
-| `AI_API_URL` | 否 | OpenAI 官方地址 | 兼容 OpenAI 协议的任意端点 |
-| `AI_API_KEY` | **是** | — | 模型密钥 |
-| `AI_MODEL` | 否 | `gpt-4o-mini` | 必须支持 Function Calling |
-| `AI_TEMPERATURE` | 否 | `0.7` | 采样温度 |
-| `AI_TIMEOUT_MS` | 否 | `60000` | 单次模型调用超时 |
-| `AMAP_KEY` | **是** | — | 高德 Web 服务密钥 |
-| `AMAP_BASE_URL` | 否 | `https://restapi.amap.com` | 走代理或测试时改这里 |
-| `AMAP_TIMEOUT_MS` | 否 | `8000` | 高德接口超时 |
-| `AMAP_CACHE_SIZE` | 否 | `200` | 高德接口缓存条数 |
-| `QWEATHER_API_KEY` | 否 | — | 和风天气 API Key；不填就用高德自带的实时天气 |
-| `QWEATHER_BASE_URL` | 配和风时必填 | — | 控制台「设置」里分给你的 API Host，前面补 `https://`（别照抄文档里的示例地址） |
-| `QWEATHER_TIMEOUT_MS` | 否 | `8000` | 和风接口超时 |
-| `STATICMAP_SECRET` | 否 | 复用 `ACCESS_TOKEN` / `AMAP_KEY` | 静态图链接的签名密钥，想单独轮换时设置 |
-| `FEISHU_APP_ID` | 否 | — | 飞书自建应用 App ID；不填就不注册飞书导出工具 |
-| `FEISHU_APP_SECRET` | 配飞书时必填 | — | 飞书自建应用 App Secret（与 App ID 必须成对） |
-| `FEISHU_WEB_ORIGIN` | 否 | — | 仅兜底：拿不到真实链接时才用它拼；开通元数据权限后不需要填 |
-| `FEISHU_LINK_SHARE` | 否 | — | `anyone_readable`（互联网可读）/ `tenant_readable`（组织内可读）/ 留空不设置 |
-| `FEISHU_SHARE_TO` | 二选一 | — | 文档授权给谁（邮箱或 `openid`），比链接分享多一步但权限更明确 |
-| `FEISHU_SHARE_MEMBER_TYPE` | 否 | `email` | 授权成员类型：`email` / `openid` / `unionid` |
-| `FEISHU_FOLDER_TOKEN` | 否 | — | 指定文件夹，一般留空（tenant token 通常只能指定应用自建文件夹） |
-| `TRIPMATCH_API_KEY` | 否 | — | 飞常准 MCP 的 API Key；不填就不接入 MCP |
-| `TRIPMATCH_MCP_URL` | 否 | 官方端点 | MCP 地址，默认 `https://ai.variflight.com/servers/tripmatch/mcp` |
-| `TRIPMATCH_TOOL_ALLOW` | 否 | 空（全部） | 逗号分隔的关键词白名单，只注册名字含这些词的工具 |
-| `TRIPMATCH_TIMEOUT_MS` | 否 | `10000` | MCP 单次调用超时 |
-| `ACCESS_TOKEN` | 公网必填 | 空（不鉴权） | 接口访问令牌 |
-| `TRUST_PROXY` | 反代后必填 | `false` | 信任 `X-Forwarded-For` |
-| `RATE_LIMIT_MAX` | 否 | `20` | 每 IP 每窗口最大请求数 |
-| `RATE_LIMIT_WINDOW_MS` | 否 | `60000` | 限流窗口长度 |
-| `MAX_TOOL_STEPS` | 否 | `5` | 单轮对话最多几轮工具调用 |
-| `MAX_HISTORY_TURNS` | 否 | `20` | 每会话保留最近多少轮 |
-| `MAX_SESSIONS` | 否 | `500` | 内存里最多保留多少会话 |
-| `SESSION_TTL_MS` | 否 | `7200000` | 会话闲置多久回收 |
-
----
-
-## 接口
-
-| 方法 | 路径 | 鉴权 | 说明 |
-|---|---|---|---|
-| `POST` | `/api/chat` | 是 | 非流式，返回 `{ reply, sessionId }` |
-| `POST` | `/api/chat/stream` | 是 | SSE 流式，事件类型见下 |
-| `POST` | `/api/clear-history` | 是 | 清空**指定**会话，`sessionId` 必填 |
-| `GET` | `/api/health` | 否 | 健康检查：会话数、缓存条目数、天气实现、工具列表、是否需要令牌 |
-| `GET` | `/api/staticmap` | HMAC 签名 | 静态地图代理，给 `<img>` 用；参数被改或签名过期一律 403 |
-
-旧的 `/chat`、`/chat/stream`、`/clear-history` 仍然可用（同一套处理器），方便老脚本无痛迁移。
-
-### SSE 事件
-
-```js
-event: session   data: {"sessionId":"abc123"}
-event: card      data: {"type":"train-list","title":"火车票","rows":[...]}   ← 结构化卡片
-event: delta     data: {"content":"岳"}          ← 逐 token，前端拼接
-event: done      data: {"sessionId":"abc123","content":"完整回答"}
-event: error     data: {"message":"错误原因"}
-```
-
-`done` 事件里带完整文本，前端以它为准兜底：万一某个 delta 丢了，最终内容还拼得回来。
-
-### 清空语义
-
-`/api/clear-history` 必须带 `sessionId`，只删这一个会话；缺参数直接 400。
-
-这是修掉的一个真 bug：旧版前端在发请求前就把 `sessionId` 置成了 `null`，而旧版后端把
-"没传 sessionId" 理解成**清空全部会话 + 清空所有缓存**。单机自用看不出来，一旦多人共用，
-别人点一下"清空"就能把你的上下文删干净。
-
----
-
-## 设计取舍
-
-**为什么不用 LangChain？**
-这个规模的项目只有 4 个工具、1 层循环，直接用原生 `fetch` + 手写循环，代码量不到 60 行，
-反而比引入框架更容易调试。工具多了、要接 RAG 或做多 Agent 协作时，再上框架。
-
-**为什么缓存放在工具层而不是接口层？**
-缓存 key 是「服务名 + 参数」，命中粒度比接口级缓存细。同一轮对话里模型可能用不同措辞问同一个
-地点，工具层的参数化 key 更容易命中。
-
-**为什么保留非流式的 `/chat`？**
-方便脚本测试和 curl 调试，也作为流式接口出问题时的降级路径。
-
-**为什么令牌不用 JWT？**
-这个项目只有一个使用方（你自己或几个朋友），不需要签发、刷新、过期、吊销那一套。
-一个随机字符串 + 定长比较就够了，密钥泄露直接换 `.env` 重启即可。
-真要多人注册登录，那是另一个量级的系统，不该塞进这个项目里。
-
-**为什么限流是手写的固定窗口？**
-不引依赖，20 行内可审计。`Map` + LRU 保证 key 数量有上限，不会被伪造 IP 撑爆内存。
-缺点是单机、不够精确（窗口边界会放过最多 2 倍请求）；多实例部署时应换 Redis 或网关限流。
-
----
+上线自查：`/api/health` 返回 200；`/server.js`、`/.env` 必须 404；`POST /api/chat` 不带令牌必须 401。
 
 ## 测试
 
@@ -722,90 +168,14 @@ event: error     data: {"message":"错误原因"}
 npm test
 ```
 
-分两层，**不需要真实模型 key、地图/天气 key 和外网**，可以放进 CI：
+101 个用例全部离线，不要真实 key、不联网：假模型服务模拟 `tool_calls` 分片，假天气服务返回固定数据，再启动真实的 `server.js`，断言 SSE 事件序列、文本拼装、分片归并、`tool_call_id` 回填，以及「源码 / 密钥 / 备份目录都拿不到」。
 
-1. **单元测试**：LRU 淘汰顺序、会话裁剪（保证 system 保留且消息成对）、限流命中与拒绝、
-   令牌定长比较、缺密钥/缺 API Host 时的配置校验、工具注册表（重名拒绝、按名分发、未知工具）、
-   导航链接生成（经纬度、`t=0/t=2`、中文名编码）、高德 `weather` 与带导航的 `route_planning`、
-   和风天气的字段整形与「预警接口失败时降级」；
-2. **端到端**：起一个假模型服务（模拟 `tool_calls` 分片）+ 一个假和风天气服务（通过
-   `QWEATHER_BASE_URL` 指过去），启动真实 `server.js`，然后断言：
-   - 静态目录里拿不到 `server.js`、`.env`、备份目录；
-   - 无令牌 401、错令牌 403、非法 sessionId 400；
-   - SSE 事件序列 `session → delta… → done`、文本拼装完整；
-   - `tool_calls.function.name` 和 `arguments` 都按 index 正确归并；
-   - 工具结果带正确的 `tool_call_id` 回填，且确实走了和风链路（带回预报与预警）；
-   - 发给模型的工具列表里**只有一个 weather**，且已切换成和风版本；
-   - 清空指定会话只影响那一个会话。
+## 设计取舍
 
-```
-  PASS  会话裁剪保留 system 且消息成对
-  PASS  只填和风 key 不填 API Host 时报错并给出提示
-  PASS  导航链接：深链是 amapuri:// 且带经纬度
-  PASS  高德 route_planning：结果里带可点击的导航链接
-  PASS  和风 weather：温度四舍五入、湿度转百分比  → 22.4℃ / 69%
-  PASS  和风 weather：预警接口失败时降级但保留实时数据
-  PASS  静态目录只暴露 public（源码/密钥/备份均 404）
-  PASS  工具结果走了和风链路并带回预报与预警  → now=多云 forecast=2 alerts=1
-  PASS  清空只删自己那一个会话  → 2 → 1
-  …
-结果：101 通过 / 0 失败
-```
-
----
-
-## 踩过的坑
-
-1. **`tool_calls` 分片**：见上文，不按 index 归并就会得到一堆残缺的 JSON；`name` 也可能被拆片。
-2. **高德的错误不是 HTTP 错误码**：HTTP 200 + `status: "0"` 才是失败，必须判 `data.status`。
-3. **`weather` 接口要的是 adcode 不是城市名**：得先调 geocode 拿到 `adcode` 再查天气。
-4. **SSE 被中间层缓冲**：加了 `X-Accel-Buffering: no` 和 `Cache-Control: no-transform`，
-   否则 Nginx 一类的反代会攒够一波才吐出来，看不到逐字效果。
-5. **密钥泄露**：第一版把 key 写死在 `server.js` 里，传上 GitHub 后才发现。现在全部走 `.env`，
-   并用 `.gitignore` 排除。
-6. **静态目录开太大**：第二版用 `express.static(__dirname)`，本意是托管 `index.html`，实际把
-   `/server.js`、`/package.json`、`/_backup_v1/server.js` 全吐出去了——备份文件里还有一把明文 key。
-   现在只托管 `public/`，并加了测试盯着这条线。
-7. **清空按钮会误伤别人**：见「清空语义」一节。
-8. **用户关页面后上游还在跑**：SSE 写不回去也不会报错，模型调用和高德请求照常烧钱。
-   现在用 `res.on('close')` + `AbortController` 一路传到 `fetch` 和 `axios`。
-9. **和风天气换了两套接口**：网上教程大多是旧的 `devapi.qweather.com + key 参数 + 城市名`，
-   现在必须是「控制台分配的专属 API Host + `X-QW-Api-Key` 头 + 先做城市搜索拿经纬度」。
-   照着老教程写会一直 401，而且 API KEY 和 JWT 两种鉴权不能混着用。
-10. **`URLSearchParams` 会把空格编成 `+`**：地图 URI 的参数是普通查询串，`+` 不会被解成空格，
-    起名带空格的地点就会定位失败。这里改用 `encodeURIComponent` 手动拼。
-11. **静态图不能把带 key 的 URL 给前端**：改成 HMAC 签名 URL + 服务端代理取图，`<img>` 也因此
-    不需要带 Authorization 头。
-12. **签名里别把 `exp` 又拼一遍**：`sig = HMAC(排序参数 + exp)`，如果 `exp` 同时还留在排序参数里，
-    校验时就会变成 `exp` 出现两次，自己签的自己验不过——这次就是这么写出 bug 的，测试立刻抓到了。
-13. **`tenant_access_token` 在响应根部**，不在 `data` 里。套通用解包逻辑会得到 undefined，
-    表现成"飞书没有返回 tenant_access_token"，其实令牌就在旁边。
-14. **`merge_info` 会藏在 `table.property` 里**，不是只在 block 顶层。只删顶层，表格一插就
-    `1770001 invalid param`；必须递归清洗（顺带删掉只读的 `table.cells`）。
-15. **应用不能跨企业迁移**：个人账号下建的应用，在新企业里不会自动生效，必须在新企业下重建，
-    否则一直 21001。
-
----
-
-## Roadmap
-
-- [x] 端到端冒烟测试（`npm test`，不依赖外网）
-- [x] 访问令牌 + 限流 + 静态目录白名单
-- [x] 客户端断开即中断上游
-- [x] 会话按 id 清空、闲置会话自动回收
-- [x] 和风天气（实时 + 预报 + 预警）与高德实时天气的按配置切换
-- [x] 路线结果带一键导航链接（`amapuri://` + H5 兜底）
-- [x] 静态地图配图（签名 URL + 服务端代理，key 不出服务端）
-- [x] 飞书云文档导出（建文档 → Markdown 转 block → 批量插入 → 授权链接）
-- [x] MCP 客户端（飞常准 Tripmatch：航班票价 / 铁路余票 / 空铁联运）
-- [x] 车次/航班结果渲染成结构化卡片，模型不再复述明细
-- [x] 工具 skill 包：MCP 工具按需加载，每轮省约 3800 tokens
-- [ ] 接入 RAG：把旅游攻略文档入库，回答时引用出处
-- [ ] 工具结果加上结构化展示（地图卡片、路线图）
-- [ ] 会话持久化（当前是内存态，重启即清空；多实例需要 Redis）
-- [ ] 高德返回 mock 的异常分支单测（`status: "0"`、空结果、超时）
-
----
+- **不引 Agent 框架**：4 个工具、1 层循环，原生 `fetch` + 手写循环不到 60 行，比引框架好调。
+- **数字不交给模型算**：车次类型按 12306 前缀判定，时长直接给成品，结构化结果渲染成卡片，回复从 1500+ 字降到 560 字。
+- **MCP 返回不是 JSON**：飞常准返回 Python `repr()`，用 40 行递归下降解析器处理；正则替换单引号会打坏文本。
+- **令牌不用 JWT**：单机、少量使用者，随机字符串 + 定长比较就够，泄露直接换 `.env` 重启。
 
 ## License
 
