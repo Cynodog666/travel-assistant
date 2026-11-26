@@ -168,7 +168,7 @@
       const response = await fetch(API_BASE + '/health');
       const info = await response.json();
       if (info && info.authRequired && !accessToken) {
-        await askAccessToken('这台服务器开启了访问保护，请输入部署时设置的 ACCESS_TOKEN');
+        await askAccessToken('');
       }
     } catch (error) {
       // 健康检查失败不影响使用，真正发消息时会再要令牌
