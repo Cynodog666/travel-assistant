@@ -62,7 +62,19 @@ class Agent {
    * 调用一次模型，流式读取，逐段回调 onDelta。
    * 返回 { content, toolCalls }，其中 toolCalls 已按 index 拼装成完整结构。
    */
-  async streamChatCompletion(messages, { signal, onDelta, round, tools } = {}) {
+  async streamChatCompletion(messages, { signal, onDelta, round, tools, disableTools = false } = {}) {
+    const body = {
+      model: this.config.aiModel,
+      messages,
+      temperature: this.config.aiTemperature,
+      stream: true,
+    };
+    // 收尾那一轮不带工具：模型只能动嘴，不会又开一个新工具把回答拖走
+    if (!disableTools) {
+      body.tools = tools || this.registry.tools;
+      body.tool_choice = 'auto';
+    }
+
     let response;
     try {
       response = await this.fetchImpl(this.config.aiApiUrl, {
@@ -71,14 +83,7 @@ class Agent {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.config.aiApiKey}`,
         },
-        body: JSON.stringify({
-          model: this.config.aiModel,
-          messages,
-          tools: tools || this.registry.tools,
-          tool_choice: 'auto',
-          temperature: this.config.aiTemperature,
-          stream: true,
-        }),
+        body: JSON.stringify(body),
         signal,
       });
     } catch (error) {
@@ -184,7 +189,7 @@ class Agent {
    * Agent 主循环：模型决定调工具 -> 执行 -> 把结果回填 -> 再来一轮，直到产出最终回答。
    * 返回完整回答文本。
    */
-  async run(messages, { signal, onDelta, onToolResult, onToolStart, sessionId, getTools } = {}) {
+  async run(messages, { signal, onDelta, onToolResult, onToolStart, onStatus, sessionId, getTools } = {}) {
     const config = this.config;
 
     for (let step = 0; step < config.maxToolSteps; step += 1) {
@@ -260,7 +265,43 @@ class Agent {
       messages.push(...toolMessages);
     }
 
-    return '这个问题需要调用的工具太多了，我先停在这里。你可以把问题拆成几步问我，比如先问路线，再问天气。';
+    // 工具步数用完了：别丢一句"工具太多了"就结束——再给模型一次**不许调工具**的
+    // 机会，把已经拿到的信息说完整。用户至少能看到一份基于真实数据的回答。
+    if (signal && signal.aborted) throw new AgentAbortError();
+    if (onStatus) {
+      try {
+        onStatus('信息查得差不多了，正在整理结论…');
+      } catch {
+        /* 进度提示失败不影响主流程 */
+      }
+    }
+
+    messages.push({
+      role: 'user',
+      content:
+        '（系统提示：这一轮的工具调用次数已经用完，请不要再调用任何工具，直接回答我。' +
+        '已经查到的内容按实写结论；没查到的部分明确说没查到，并给出下一步建议。不要只回一句话。）',
+    });
+
+    const round = createRoundSignal(signal, config.aiTimeoutMs);
+    let finalText = '';
+    try {
+      const result = await this.streamChatCompletion(messages, {
+        signal: round.signal,
+        onDelta,
+        round,
+        disableTools: true,
+      });
+      finalText = (result.content || '').trim();
+    } catch (error) {
+      if (error instanceof AgentAbortError) throw error;
+      console.warn('[agent] 收尾回答失败：', error.message);
+    } finally {
+      round.dispose();
+    }
+
+    if (finalText) return finalText;
+    return '这次要查的东西有点多，我没能在限定步数内整理完。你可以把问题拆成两步问我，比如先说目的地和日期，我再补交通和天气。';
   }
 }
 

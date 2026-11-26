@@ -63,7 +63,9 @@ function loadConfig(env = process.env) {
     qweatherBaseUrl: (env.QWEATHER_BASE_URL || '').trim().replace(/\/+$/, ''),
     qweatherTimeoutMs: toInt('QWEATHER_TIMEOUT_MS', env.QWEATHER_TIMEOUT_MS, 8_000, { min: 1_000, max: 60_000 }),
 
-    maxToolSteps: toInt('MAX_TOOL_STEPS', env.MAX_TOOL_STEPS, 5, { min: 1, max: 20 }),
+    // 规划一趟行程通常要 4~6 次工具调用（skill + 地理 + POI + 路线 + 天气/车票），
+    // 默认给到 8；到顶了还会补一次「不许调工具」的收尾回答，不会突然断在半路。
+    maxToolSteps: toInt('MAX_TOOL_STEPS', env.MAX_TOOL_STEPS, 8, { min: 1, max: 20 }),
     maxHistoryTurns: toInt('MAX_HISTORY_TURNS', env.MAX_HISTORY_TURNS, 20, { min: 1, max: 200 }),
     maxSessions: toInt('MAX_SESSIONS', env.MAX_SESSIONS, 500, { min: 1, max: 100_000 }),
     // 会话落盘：重启 / pm2 reload 之后还能接着聊，不会突然"失忆"

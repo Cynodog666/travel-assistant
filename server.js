@@ -370,6 +370,8 @@ function createApp(config, deps = createDeps(config)) {
         onDelta: (delta) => send('delta', { content: delta }),
         // 工具要跑几秒（尤其远程 MCP），先告诉前端在干什么，避免看着像卡死
         onToolStart: (toolName) => send('status', { label: toolProgressLabel(toolName) }),
+        // 步数用完、进入收尾时也告诉用户一声，别让他以为对话断了
+        onStatus: (label) => send('status', { label }),
         // 结构化的工具结果直接推成卡片事件，前端原样渲染，不劳模型复述
         onToolResult: (toolName, toolResult) => {
           const card = buildUiCard(toolName, toolResult);
@@ -380,7 +382,11 @@ function createApp(config, deps = createDeps(config)) {
       sessions.appendTurn(input.sessionId, input.message, reply);
       send('done', { sessionId: input.sessionId, content: reply });
     } catch (error) {
-      if (error instanceof AgentAbortError || controller.signal.aborted) {
+      if (error instanceof AgentAbortError && error.timedOut) {
+        // 只是上游超时：前端要明确告诉用户，否则看着就像"说了句就没了"
+        console.warn(`[chat/stream] 模型超时（session=${input.sessionId}）`);
+        send('error', { message: '模型这次响应超时了，请再问一次，或把问题拆小一点' });
+      } else if (error instanceof AgentAbortError || controller.signal.aborted) {
         // 用户主动关页面，不算错误，也不用写任何东西
         console.log(`[chat/stream] 客户端断开，已中断上游（session=${input.sessionId}）`);
       } else {
