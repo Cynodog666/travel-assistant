@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect x="0" y="0" width="64" height="64" rx="11" fill="#9c3f2f"/>
+  <rect x="3.5" y="3.5" width="57" height="57" rx="9" fill="none" stroke="#b0523f" stroke-width="1.6"/>
+  <text x="32" y="45.5" text-anchor="middle" font-family="Songti SC, STSong, SimSun, serif"
+        font-size="39" fill="#fdf6f2">坤</text>
+</svg>
