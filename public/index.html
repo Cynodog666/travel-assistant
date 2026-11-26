@@ -3,503 +3,439 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>坤坤 - 旅游管家</title>
+    <meta name="theme-color" content="#f6f2ea">
+    <title>坤坤 · 旅行管家</title>
     <style>
-        /* 不引外部字体：部署在境外/内网时它会拖慢首屏，而且离线打不开 */
-        * { 
-            margin: 0; 
-            padding: 0; 
-            box-sizing: border-box; 
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        :root {
+            --paper: #f6f2ea;
+            --card: #fffdf9;
+            --ink: #26231f;
+            --ink-soft: #47423a;
+            --muted: #8d857a;
+            --line: #e4dcd0;
+            --accent: #9c3f2f;
+            --accent-soft: #f4e5df;
+            --shadow: 0 1px 2px rgba(38, 35, 31, 0.04), 0 8px 24px rgba(38, 35, 31, 0.05);
         }
-        
-        body { 
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            display: flex; 
-            flex-direction: column; 
-            height: 100vh;
-            height: 100dvh;
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+        }
+
+        body {
+            background: var(--paper);
+            /* 纸面质感：两层极淡的径向光，不引外部图片 */
+            background-image:
+                radial-gradient(120% 80% at 12% 0%, #fffdf8 0%, rgba(255, 253, 248, 0) 55%),
+                radial-gradient(90% 60% at 100% 100%, #f1ece2 0%, rgba(241, 236, 226, 0) 60%);
+            color: var(--ink);
+            font-family: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+            -webkit-font-smoothing: antialiased;
             overflow: hidden;
         }
-        
-        /* 启动动画 - 简洁橙色圆球 */
+
+        .serif {
+            font-family: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+        }
+
+        /* ============ 启动页 ============ */
         .splash-screen {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
+            inset: 0;
             z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--paper);
+            background-image:
+                radial-gradient(120% 80% at 20% 10%, #fffdf8 0%, rgba(255, 253, 248, 0) 60%);
+            opacity: 1;
         }
-        
-        .circle {
-            width: 0;
-            height: 0;
-            background: linear-gradient(135deg, #ff7e5f, #feb47b);
-            border-radius: 50%;
-            animation: expandCircle 1.5s ease-out forwards;
-            box-shadow: 0 0 80px rgba(255,126,95,0.4);
-        }
-        
-        @keyframes expandCircle {
-            0% { 
-                width: 0; 
-                height: 0; 
-                opacity: 0;
-            }
-            70% { 
-                width: 60vh; 
-                height: 60vh; 
-                opacity: 1;
-                transform: scale(1.1);
-            }
-            100% { 
-                width: 50vh; 
-                height: 50vh; 
-                opacity: 1;
-            }
-        }
-        
-        .welcome-text {
-            color: #ffffff;
-            font-size: 3vh;
-            text-align: center;
-            margin-top: 50px;
-            opacity: 0;
-            transform: translateY(20px);
-            animation: textAppear 1s ease-out 1.5s forwards;
-            text-shadow: 0 0 20px rgba(255,126,95,0.6);
-        }
-        
-        @keyframes textAppear {
-            from { 
-                opacity: 0; 
-                transform: translateY(20px); 
-            }
-            to { 
-                opacity: 1; 
-                transform: translateY(0); 
-            }
-        }
-        
-        /* 主界面样式 */
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            width: 100%;
-            padding: 20px;
+
+        .splash-inner {
             display: flex;
             flex-direction: column;
+            align-items: center;
+            gap: 18px;
+            animation: splashIn 0.9s ease-out both;
+        }
+
+        .splash-line {
+            font-size: 14px;
+            letter-spacing: 0.14em;
+            color: var(--muted);
+        }
+
+        @keyframes splashIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 印章：整个界面的视觉锚点，也是品牌记号 */
+        .seal {
+            width: 38px;
+            height: 38px;
+            flex: 0 0 38px;
+            display: grid;
+            place-items: center;
+            border-radius: 6px;
+            background: var(--accent);
+            color: #fdf6f2;
+            font-family: "Songti SC", "STSong", "SimSun", serif;
+            font-size: 20px;
+            line-height: 1;
+            letter-spacing: 0;
+            box-shadow: 0 2px 8px rgba(156, 63, 47, 0.18);
+        }
+
+        .seal--lg {
+            width: 64px;
+            height: 64px;
+            flex-basis: 64px;
+            font-size: 34px;
+            border-radius: 10px;
+        }
+
+        /* ============ 主体 ============ */
+        .app {
             height: 100vh;
             height: 100dvh;
-            opacity: 0;
-            animation: fadeIn 1s ease-out forwards;
+            max-width: 780px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            flex-direction: column;
+            animation: fadeIn 0.6s ease-out both;
         }
-        
+
         @keyframes fadeIn {
             from { opacity: 0; }
             to { opacity: 1; }
         }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 20px;
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 18px 2px 16px;
+            border-bottom: 1px solid var(--line);
         }
-        
-        .header h1 {
-            font-size: 2.5rem;
-            background: linear-gradient(90deg, #ff7e5f, #feb47b);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-            margin-bottom: 10px;
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
         }
-        
-        .header p {
-            color: #a8d8ea;
-            font-size: 1rem;
+
+        .brand h1 {
+            font-size: 15.5px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
-        
+
+        .brand p {
+            margin-top: 3px;
+            font-size: 11.5px;
+            color: var(--muted);
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .top-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+
+        .ghost {
+            padding: 6px 9px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--muted);
+            font-size: 12.5px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: color 0.18s ease, background 0.18s ease;
+        }
+
+        .ghost:hover {
+            color: var(--accent);
+            background: var(--accent-soft);
+        }
+
+        .ghost:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            background: transparent;
+            color: var(--muted);
+        }
+
+        /* 对话区：min-height:0 是移动端能正常滚动收缩的关键 */
         .chat-container {
             flex: 1;
-            padding: 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 15px;
+            min-height: 0;
             overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
             display: flex;
             flex-direction: column;
-            gap: 20px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            margin-bottom: 20px;
+            gap: 14px;
+            padding: 22px 2px 18px;
         }
-        
+
         .chat-container::-webkit-scrollbar {
             width: 6px;
         }
-        
-        .chat-container::-webkit-scrollbar-track {
-            background: rgba(0, 0, 0, 0.1);
-            border-radius: 10px;
-        }
-        
+
         .chat-container::-webkit-scrollbar-thumb {
-            background: rgba(168, 216, 234, 0.3);
-            border-radius: 10px;
+            background: #ded5c6;
+            border-radius: 8px;
         }
-        
+
+        /* 开场白：不是气泡，是一段引文 */
+        .greeting {
+            max-width: 34em;
+            padding: 16px 18px;
+            border-left: 2px solid var(--accent);
+            border-radius: 0 10px 10px 0;
+            background: var(--card);
+            color: #35312b;
+            font-size: 15.5px;
+            line-height: 2.05;
+            letter-spacing: 0.02em;
+            box-shadow: var(--shadow);
+        }
+
         .message {
-            padding: 18px 24px;
-            border-radius: 20px;
-            max-width: 75%;
-            line-height: 1.6;
-            font-size: 15px;
-            position: relative;
-            animation: slideIn 0.3s ease-out;
+            max-width: 76%;
+            padding: 12px 16px;
+            border-radius: 14px;
+            font-size: 14.5px;
+            line-height: 1.8;
             white-space: pre-wrap;
             word-break: break-word;
+            animation: bubbleIn 0.24s ease-out both;
         }
-        
-        @keyframes slideIn {
-            from { 
-                opacity: 0; 
-                transform: translateY(10px); 
-            }
-            to { 
-                opacity: 1; 
-                transform: translateY(0); 
-            }
-        }
-        
-        .user-message {
-            background: linear-gradient(135deg, #ff7e5f, #feb47b);
-            color: white;
-            align-self: flex-end;
-            border-bottom-right-radius: 5px;
-            box-shadow: 0 4px 15px rgba(255, 126, 95, 0.2);
-        }
-        
-        .ai-message {
-            background: rgba(255, 255, 255, 0.1);
-            color: #e8f4f8;
-            align-self: flex-start;
-            border-bottom-left-radius: 5px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        
-        .input-area {
+
+        /* 空会话的建议问题：点一下填进输入框，不自动发送 */
+        .chips {
             display: flex;
-            gap: 10px;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 10px;
-            border-radius: 30px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
+            flex-wrap: wrap;
+            gap: 8px;
+            max-width: 34em;
         }
-        
-        #message-input {
-            flex: 1;
-            padding: 15px 20px;
+
+        .chip {
+            padding: 7px 12px;
             background: transparent;
-            border: none;
-            outline: none;
-            color: #e8f4f8;
-            font-size: 15px;
-            resize: none;
-            min-height: 50px;
-            max-height: 200px;
-        }
-        
-        #message-input::placeholder {
-            color: rgba(168, 216, 234, 0.5);
-        }
-        
-        .button-group {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            padding-right: 5px;
-        }
-        
-        .btn {
-            padding: 12px 20px;
-            border-radius: 20px;
-            border: none;
-            font-weight: 600;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--muted);
+            font-size: 12.5px;
+            font-family: inherit;
+            line-height: 1.4;
+            text-align: left;
             cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
         }
-        
-        #send-button {
-            background: linear-gradient(135deg, #ff7e5f, #feb47b);
-            color: white;
+
+        .chip:hover {
+            color: var(--accent);
+            border-color: #dcc0b6;
+            background: var(--accent-soft);
         }
-        
-        #send-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(255, 126, 95, 0.3);
+
+        @keyframes bubbleIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
         }
-        
-        #send-button:disabled {
-            background: rgba(255, 255, 255, 0.1);
-            color: rgba(255, 255, 255, 0.5);
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
+
+        .user-message {
+            align-self: flex-end;
+            background: var(--accent);
+            color: #fff8f4;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 6px 18px rgba(156, 63, 47, 0.16);
         }
-        
-        #clear-button {
-            background: rgba(255, 255, 255, 0.1);
-            color: #a8d8ea;
+
+        .ai-message {
+            align-self: flex-start;
+            background: var(--card);
+            color: var(--ink-soft);
+            border: 1px solid var(--line);
+            border-bottom-left-radius: 4px;
         }
-        
-        #clear-button:hover {
-            background: rgba(255, 255, 255, 0.15);
-            transform: translateY(-2px);
-        }
-        
-        #save-button {
-            background: rgba(168, 216, 234, 0.2);
-            color: #a8d8ea;
-        }
-        
-        #save-button:hover {
-            background: rgba(168, 216, 234, 0.3);
-            transform: translateY(-2px);
-        }
-        
+
         .typing {
             display: flex;
-            gap: 8px;
-            padding: 18px 24px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
+            gap: 7px;
             align-self: flex-start;
-            border-bottom-left-radius: 5px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 14px 18px;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            border-bottom-left-radius: 4px;
         }
-        
+
         .dot {
-            width: 10px;
-            height: 10px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
-            background: #a8d8ea;
-            animation: typing 1.4s infinite ease-in-out both;
+            background: #c9b9a7;
+            animation: typing 1.3s infinite ease-in-out both;
         }
-        
-        .dot:nth-child(1) { animation-delay: -0.32s; }
-        .dot:nth-child(2) { animation-delay: -0.16s; }
-        
+
+        .dot:nth-child(2) { animation-delay: -0.22s; }
+        .dot:nth-child(3) { animation-delay: -0.44s; }
+
         @keyframes typing {
-            0%, 80%, 100% { transform: scale(0.4); opacity: 0.5; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-        
-        /* ============ 移动端适配 ============ */
-        @media (max-width: 768px) {
-            .container {
-                padding: 10px;
-                padding-bottom: calc(10px + env(safe-area-inset-bottom));
-            }
-
-            .header {
-                margin-bottom: 12px;
-            }
-
-            .header h1 {
-                font-size: 1.6rem;
-                margin-bottom: 4px;
-            }
-
-            .header p {
-                font-size: 0.85rem;
-            }
-
-            .chat-container {
-                padding: 12px;
-                gap: 12px;
-                margin-bottom: 12px;
-                border-radius: 12px;
-            }
-
-            .message {
-                max-width: 88%;
-                padding: 12px 16px;
-                font-size: 15px;
-            }
-
-            .input-area {
-                padding: 8px;
-                gap: 6px;
-            }
-
-            /* iOS 上输入框字号小于 16px 会触发自动放大 */
-            #message-input {
-                padding: 10px 12px;
-                font-size: 16px;
-                min-height: 44px;
-            }
-
-            .button-group {
-                gap: 6px;
-            }
-
-            .btn {
-                padding: 10px 12px;
-                font-size: 14px;
-                white-space: nowrap;
-            }
+            0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+            40% { opacity: 1; transform: translateY(-2px); }
         }
 
-        /* 超窄屏：按钮换行，避免挤压输入框 */
-        @media (max-width: 420px) {
-            .input-area {
-                flex-wrap: wrap;
-            }
-
-            #message-input {
-                flex-basis: 100%;
-            }
-
-            .button-group {
-                width: 100%;
-                justify-content: flex-end;
-                padding: 0 4px 2px;
-            }
+        /* ============ 输入区 ============ */
+        .composer {
+            flex: 0 0 auto;
+            padding: 12px 0 calc(14px + env(safe-area-inset-bottom));
+            border-top: 1px solid var(--line);
         }
-        /* 访问令牌输入层 */
-        .token-gate {
-            position: fixed;
-            inset: 0;
-            z-index: 1200;
+
+        .field {
             display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 24px;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        }
-
-        .token-card {
-            width: min(380px, 100%);
-            padding: 28px 24px;
+            align-items: flex-end;
+            gap: 8px;
+            padding: 6px 6px 6px 14px;
+            background: var(--card);
+            border: 1px solid var(--line);
             border-radius: 16px;
-            background: #1f2740;
-            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+            box-shadow: var(--shadow);
+            transition: border-color 0.18s ease, box-shadow 0.18s ease;
         }
 
-        .token-card h2 {
-            margin-bottom: 10px;
-            font-size: 18px;
-            color: #e6e9f2;
+        .field:focus-within {
+            border-color: #d8bdb2;
+            box-shadow: 0 0 0 3px rgba(156, 63, 47, 0.06);
         }
 
-        .token-card p {
-            margin-bottom: 18px;
-            font-size: 13px;
-            line-height: 1.6;
-            color: #9aa4bf;
-            text-align: left;
+        #message-input {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 0;
+            border: 0;
+            outline: 0;
+            background: transparent;
+            color: var(--ink);
+            font-size: 15px;
+            font-family: inherit;
+            line-height: 1.65;
+            resize: none;
+            max-height: 150px;
         }
 
-        #token-input {
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid #33405f;
-            border-radius: 10px;
-            background: #16203a;
-            color: #e6e9f2;
-            font-size: 14px;
-            outline: none;
+        #message-input::placeholder {
+            color: #b3a89b;
         }
 
-        #token-input:focus {
-            border-color: #ff8c42;
+        #send-button {
+            flex: 0 0 auto;
+            width: 62px;
+            height: 40px;
+            border: 0;
+            border-radius: 12px;
+            background: var(--accent);
+            color: #fff8f4;
+            font-size: 13.5px;
+            font-family: inherit;
+            letter-spacing: 0.06em;
+            cursor: pointer;
+            transition: background 0.18s ease, transform 0.18s ease;
         }
 
-        .token-error {
-            min-height: 18px;
-            margin-top: 8px;
-            font-size: 12px;
-            color: #ff6b6b;
+        #send-button:hover:not(:disabled) {
+            background: #89362a;
         }
 
-        .token-btn {
-            width: 100%;
-            margin-top: 6px;
+        #send-button:active:not(:disabled) {
+            transform: scale(0.97);
         }
 
-        /* 轻提示 */
-        .toast {
-            position: fixed;
-            left: 50%;
-            bottom: 88px;
-            z-index: 1100;
-            max-width: 80vw;
-            padding: 10px 18px;
-            border-radius: 999px;
-            background: rgba(20, 26, 44, 0.92);
-            color: #e6e9f2;
-            font-size: 13px;
-            text-align: center;
-            opacity: 0;
-            pointer-events: none;
-            transform: translateX(-50%) translateY(12px);
-            transition: opacity 0.25s ease, transform 0.25s ease;
+        #send-button:disabled {
+            background: #d9cec0;
+            color: #fbf7f2;
+            cursor: not-allowed;
         }
 
-        .toast.show {
-            opacity: 1;
-            transform: translateX(-50%) translateY(0);
+        .hint {
+            margin-top: 9px;
+            padding-left: 2px;
+            font-size: 11.5px;
+            line-height: 1.7;
+            color: var(--muted);
         }
 
-        /* 回答里的链接：路线工具会返回 amapuri:// 深链和 H5 导航链接 */
+        /* ============ 回答里的链接 / 地图 ============ */
         .inline-link {
-            color: #ffb27a;
-            text-decoration: underline;
+            color: var(--accent);
+            text-decoration: none;
+            border-bottom: 1px solid rgba(156, 63, 47, 0.35);
             word-break: break-all;
         }
 
-        /* 回答里的地图：map_image 工具生成的静态图 */
-        .chat-map {
-            display: block;
-            max-width: 100%;
-            margin: 8px 0;
-            border-radius: 12px;
+        .inline-link:hover {
+            border-bottom-color: var(--accent);
         }
 
-        /* 结构化卡片：车次 / 航班 / 车站，由服务端直接给数据，不经过模型复述 */
+        .chat-map {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            margin: 10px 0;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+        }
+
+        /* ============ 结构化卡片 ============ */
         .chat-card {
             align-self: stretch;
-            margin: 8px 0;
+            margin: 2px 0;
             padding: 12px 14px;
-            border: 1px solid rgba(255, 255, 255, 0.09);
+            background: var(--card);
+            border: 1px solid var(--line);
             border-radius: 14px;
-            background: rgba(255, 255, 255, 0.05);
+            box-shadow: var(--shadow);
             font-size: 13px;
+            animation: bubbleIn 0.24s ease-out both;
         }
 
         .chat-card-head {
             display: flex;
             align-items: baseline;
-            gap: 8px;
-            margin-bottom: 8px;
+            flex-wrap: wrap;
+            gap: 4px 8px;
+            margin-bottom: 6px;
             font-weight: 600;
-            color: #f2f4f8;
+            color: var(--ink);
         }
 
         .chat-card-sub {
-            font-size: 12px;
+            font-size: 11.5px;
             font-weight: 400;
-            color: #98a2b8;
+            color: var(--muted);
         }
 
         .chat-card-body {
@@ -512,107 +448,350 @@
             flex-wrap: wrap;
             align-items: baseline;
             gap: 4px 10px;
-            padding: 7px 0;
-            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 8px 0;
+            border-top: 1px solid #f0eae0;
+            color: var(--ink-soft);
         }
 
         .chat-card-row:first-child {
             border-top: 0;
         }
 
-        .chat-card-cell {
-            color: #d8dded;
-        }
-
         .chat-card-strong {
             font-weight: 600;
-            color: #ffffff;
+            color: var(--ink);
+            letter-spacing: 0.02em;
         }
 
         .chat-card-muted {
             font-size: 12px;
-            color: #8d97ad;
+            color: var(--muted);
         }
 
-        /* 车次类型标记：高铁/动车 vs 普速，避免把普速夜车当成高铁 */
         .chat-card-badge {
             padding: 1px 7px;
             border-radius: 999px;
             font-size: 11px;
-            color: #b9c2d6;
-            background: rgba(255, 255, 255, 0.09);
+            color: #7d7466;
+            background: #f1ece2;
         }
 
         .chat-card-badge--fast {
-            color: #ffd0a8;
-            background: rgba(255, 140, 66, 0.18);
+            color: #a34a2c;
+            background: #f7e6dc;
         }
 
         .chat-card-arrow {
-            color: #6f7891;
+            color: #b9ad9d;
         }
 
         .chat-card-price {
             margin-left: auto;
             font-weight: 600;
-            color: #ffb27a;
+            color: var(--accent);
+            white-space: nowrap;
         }
 
         .chat-card-soldout {
             margin-left: auto;
             font-weight: 600;
-            color: #ff7b7b;
+            color: #9b3b3b;
+            white-space: nowrap;
         }
 
         .chat-card-footer {
             margin-top: 8px;
-            font-size: 11px;
-            color: #6f7891;
+            padding-top: 8px;
+            border-top: 1px solid #f0eae0;
+            font-size: 11.5px;
+            color: var(--muted);
+        }
+
+        /* ============ 令牌层 ============ */
+        .token-gate {
+            position: fixed;
+            inset: 0;
+            z-index: 1200;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: var(--paper);
+            background-image: radial-gradient(120% 80% at 20% 10%, #fffdf8 0%, rgba(255, 253, 248, 0) 60%);
+        }
+
+        .token-card {
+            width: min(400px, 100%);
+            padding: 30px 26px 24px;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            box-shadow: 0 18px 50px rgba(38, 35, 31, 0.12);
+        }
+
+        .token-card .seal {
+            margin-bottom: 16px;
+        }
+
+        .token-card h2 {
+            margin-bottom: 10px;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .token-card p {
+            margin-bottom: 18px;
+            font-size: 12.5px;
+            line-height: 1.8;
+            color: var(--muted);
+        }
+
+        #token-input {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fdfbf7;
+            color: var(--ink);
+            font-size: 15px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        #token-input:focus {
+            border-color: #d8bdb2;
+            box-shadow: 0 0 0 3px rgba(156, 63, 47, 0.06);
+        }
+
+        .token-error {
+            min-height: 18px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--accent);
+        }
+
+        .token-btn {
+            width: 100%;
+            height: 42px;
+            margin-top: 4px;
+            border: 0;
+            border-radius: 10px;
+            background: var(--accent);
+            color: #fff8f4;
+            font-size: 14px;
+            font-family: inherit;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+        }
+
+        .token-btn:hover {
+            background: #89362a;
+        }
+
+        /* ============ 轻提示 ============ */
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 92px;
+            z-index: 1100;
+            max-width: 80vw;
+            padding: 9px 16px;
+            border-radius: 999px;
+            background: rgba(38, 35, 31, 0.9);
+            color: #fbf7f2;
+            font-size: 12.5px;
+            text-align: center;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-50%) translateY(10px);
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* ============ 平板 ============ */
+        @media (max-width: 780px) {
+            .app { padding: 0 16px; }
+        }
+
+        /* ============ 手机 ============ */
+        @media (max-width: 560px) {
+            .app { padding: 0 13px; }
+
+            .topbar {
+                padding: 12px 0 11px;
+                gap: 8px;
+            }
+
+            .seal {
+                width: 32px;
+                height: 32px;
+                flex-basis: 32px;
+                font-size: 17px;
+                border-radius: 5px;
+            }
+
+            .brand { gap: 9px; }
+
+            .brand h1 { font-size: 14.5px; }
+
+            .brand p {
+                font-size: 10.5px;
+                /* 窄屏优先保住标题，副标题最多一行省略 */
+                max-width: 42vw;
+            }
+
+            .ghost {
+                padding: 6px 7px;
+                font-size: 12px;
+            }
+
+            .chat-container {
+                gap: 11px;
+                padding: 16px 0 14px;
+            }
+
+            .greeting {
+                padding: 14px 15px;
+                font-size: 14.5px;
+                line-height: 1.95;
+                letter-spacing: 0.01em;
+            }
+
+            .message {
+                max-width: 88%;
+                padding: 11px 14px;
+                font-size: 14px;
+                line-height: 1.75;
+            }
+
+            .chips {
+                gap: 7px;
+            }
+
+            .chip {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+
+            .composer {
+                padding: 10px 0 calc(12px + env(safe-area-inset-bottom));
+            }
+
+            .field {
+                padding: 5px 5px 5px 13px;
+                border-radius: 14px;
+            }
+
+            /* iOS 输入框 <16px 会触发页面自动放大 */
+            #message-input {
+                font-size: 16px;
+                padding: 9px 0;
+                line-height: 1.55;
+            }
+
+            #send-button {
+                width: 60px;
+                height: 40px;
+                font-size: 13px;
+            }
+
+            .hint {
+                margin-top: 8px;
+                font-size: 11px;
+                line-height: 1.6;
+            }
+
+            .chat-card {
+                padding: 11px 12px;
+                font-size: 12.5px;
+            }
+
+            .chat-card-row {
+                gap: 3px 8px;
+                padding: 7px 0;
+            }
+
+            .chat-card-price,
+            .chat-card-soldout {
+                margin-left: 0;
+                width: 100%;
+                padding-top: 3px;
+            }
+
+            .token-card {
+                padding: 24px 20px 20px;
+            }
+        }
+
+        /* 超窄屏：让卡片的次要信息换行，不横向溢出 */
+        @media (max-width: 380px) {
+            .brand p { display: none; }
+            .chat-card-muted { font-size: 11.5px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- 启动动画 - 简洁橙色圆球 -->
     <div class="splash-screen" id="splash-screen">
-        <div class="circle" id="circle"></div>
-        <div class="welcome-text">我是坤坤，您的旅游管家</div>
+        <div class="splash-inner">
+            <div class="seal seal--lg">坤</div>
+            <div class="splash-line serif">浮生多碌，当赴烟霞</div>
+        </div>
     </div>
-    
-    <!-- 访问令牌输入层：服务器启用 ACCESS_TOKEN 且本地没存令牌时才会显示 -->
+
     <div class="token-gate" id="token-gate" style="display: none;">
         <div class="token-card">
-            <h2>需要访问令牌</h2>
-            <p>这台服务器开启了访问保护，请输入部署时设置的 ACCESS_TOKEN。令牌只保存在本机浏览器里。</p>
-            <input id="token-input" type="password" placeholder="ACCESS_TOKEN" autocomplete="current-password">
+            <div class="seal">坤</div>
+            <h2>输入演示口令</h2>
+            <p>这台服务器开了访问保护，口令只保存在本机浏览器，不会上传。</p>
+            <input id="token-input" type="password" placeholder="演示口令" autocomplete="current-password">
             <div class="token-error" id="token-error"></div>
-            <button class="btn token-btn" id="token-submit" type="button">进入</button>
+            <button class="token-btn" id="token-submit" type="button">进入</button>
         </div>
     </div>
 
-    <!-- 主聊天界面 -->
-    <div class="container" id="main-container" style="display: none;">
-        <div class="header">
-            <h1>坤坤 - 旅游管家</h1>
-            <p>智能对话 · 地图服务 · 旅行助手</p>
-        </div>
-        
-        <div class="chat-container" id="chat-container">
-            <div class="ai-message message" id="welcome-message"></div>
-        </div>
-        
-        <div class="input-area">
-            <textarea id="message-input" placeholder="请问需要什么帮助？..." rows="1"></textarea>
-            <div class="button-group">
-                <button id="clear-button" class="btn" type="button">清空</button>
-                <button id="save-button" class="btn" type="button">保存记录</button>
-                <button id="send-button" class="btn" type="button">发送</button>
+    <main class="app" id="main-container" style="display: none;">
+        <header class="topbar">
+            <div class="brand">
+                <span class="seal">坤</span>
+                <div>
+                    <h1>坤坤 · 旅行管家</h1>
+                    <p>查得到的数据，才敢写进行程</p>
+                </div>
             </div>
-        </div>
-    </div>
+            <div class="top-actions">
+                <button id="clear-button" class="ghost" type="button">清空</button>
+                <button id="save-button" class="ghost" type="button">保存记录</button>
+            </div>
+        </header>
 
-    <!-- 轻提示，替代 alert -->
+        <section class="chat-container" id="chat-container">
+            <div class="greeting serif" id="welcome-message"></div>
+        </section>
+
+        <footer class="composer">
+            <div class="field">
+                <textarea id="message-input" rows="1" placeholder="想去哪、玩几天？"></textarea>
+                <button id="send-button" type="button">发送</button>
+            </div>
+            <div class="hint">路线、天气、火车票、航班都由真实接口查询；查不到会直说没查到。</div>
+        </footer>
+    </main>
+
     <div class="toast" id="toast"></div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20261127"></script>
 </body>
 </html>

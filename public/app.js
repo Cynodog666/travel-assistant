@@ -27,18 +27,12 @@
 
   const els = {};
 
-  // 欢迎语：HTML 版本用于气泡，纯文本版本用于导出 .txt。
-  // 注意：单行拼接，不能有换行和缩进——气泡用了 pre-wrap，源码空白会被原样渲染。
-  const WELCOME_HTML =
-    '你好！我是坤坤，你的专属旅游管家！<br><br>我可以帮你：<br>' +
-    '• 查询景点信息和旅游攻略<br>' +
-    '• 地址转坐标：地址：北京市朝阳区天安门<br>' +
-    '• 坐标转地址：坐标：116.403874,39.914885<br>' +
-    '• 地点搜索：搜索：上海外滩附近酒店<br>' +
-    '• 路线规划：从：天安门到：故宫<br>' +
-    '• 实时天气：长沙今天天气怎么样';
+  // 欢迎语：一句引文，单行字符串——气泡用了 pre-wrap，源码换行和缩进会被原样渲染。
+  // HTML 版本用于页面，纯文本版本用于导出 .txt。
+  const WELCOME_TEXT =
+    '浮生多碌，当赴烟霞。四方胜景静候来客，说说你心之所向，我伴你规划旅途，览尽世间风物。';
 
-  const WELCOME_TEXT = WELCOME_HTML.replace(/<br>/g, '\n').replace(/<[^>]+>/g, '');
+  const WELCOME_HTML = WELCOME_TEXT;
 
   // ---------------------------------------------------------------------
   // 小工具
@@ -291,10 +285,38 @@
     return wrapper;
   }
 
-  function resetWelcome() {
-    els.chatContainer.innerHTML = '<div class="ai-message message" id="welcome-message"></div>';
+  // 空会话的建议问题：只是示例，点一下填进输入框，由用户决定发不发
+  const SUGGESTIONS = [
+    '湘潭到张家界怎么走，要多久',
+    '明天长沙天气怎么样',
+    '查一下长沙到北京的高铁'
+  ];
+
+  function renderEmptyState() {
+    els.chatContainer.innerHTML = '<div class="greeting serif" id="welcome-message"></div>';
     els.welcomeMessage = document.getElementById('welcome-message');
     els.welcomeMessage.innerHTML = WELCOME_HTML;
+
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    SUGGESTIONS.forEach((text) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip';
+      chip.textContent = text;
+      chip.addEventListener('click', () => {
+        els.messageInput.value = text;
+        els.messageInput.focus();
+        // 手动触发 input，让输入框按内容重新算高度
+        els.messageInput.dispatchEvent(new Event('input'));
+      });
+      chips.appendChild(chip);
+    });
+    els.chatContainer.appendChild(chips);
+  }
+
+  function resetWelcome() {
+    renderEmptyState();
   }
 
   function setBusy(busy) {
@@ -515,8 +537,7 @@
     els.clearButton = document.getElementById('clear-button');
     els.saveButton = document.getElementById('save-button');
 
-    els.welcomeMessage = document.getElementById('welcome-message');
-    els.welcomeMessage.innerHTML = WELCOME_HTML;
+    renderEmptyState();
     chatHistory.push('AI: ' + WELCOME_TEXT);
 
     bindEvents();
