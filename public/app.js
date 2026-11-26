@@ -123,16 +123,43 @@
       els.tokenGate.style.display = 'flex';
       els.tokenInput.value = '';
       showTokenError(reason || '');
-      setTimeout(() => els.tokenInput.focus(), 50);
+      // 选中框里可能被浏览器自动填进去的旧口令，用户直接打字就会覆盖掉它
+      setTimeout(() => {
+        els.tokenInput.focus();
+        els.tokenInput.select();
+      }, 50);
     });
   }
 
-  function submitAccessToken() {
+  async function submitAccessToken() {
     const value = els.tokenInput.value.trim();
     if (!value) {
-      showTokenError('令牌不能为空');
+      showTokenError('口令不能为空');
       return;
     }
+    if (els.tokenSubmit.disabled) return;
+
+    // 先在服务器上验一次：错了就当场拦下，不放人进去、也不写进 localStorage
+    els.tokenSubmit.disabled = true;
+    try {
+      const check = await fetch(API_BASE + '/auth-check', {
+        headers: { Authorization: 'Bearer ' + value },
+      });
+      if (!check.ok) {
+        showTokenError(
+          check.status === 403 ? '口令不正确，请重新输入' : '服务器暂时连不上，请稍后再试'
+        );
+        els.tokenInput.focus();
+        els.tokenInput.select();
+        return;
+      }
+    } catch (error) {
+      showTokenError('网络异常，请检查网络后重试');
+      return;
+    } finally {
+      els.tokenSubmit.disabled = false;
+    }
+
     accessToken = value;
     localStorage.setItem(TOKEN_KEY, value);
     els.tokenGate.style.display = 'none';
@@ -155,21 +182,35 @@
       localStorage.removeItem(TOKEN_KEY);
       accessToken = '';
       await askAccessToken(
-        response.status === 403 ? '令牌不正确，请重新输入' : '这台服务器需要访问令牌'
+        response.status === 403
+          ? '口令不正确，请重新输入（浏览器自动填的旧口令要先删掉）'
+          : '这台服务器需要访问口令'
       );
       return apiFetch(path, options, true);
     }
     return response;
   }
 
-  /** 启动时问一次服务器：开没开访问保护。开了且本地没令牌就先让人填。 */
+  /** 启动时问一次服务器：开没开访问保护；存过口令的先验证还有没有效。 */
   async function ensureAuth() {
     try {
       const response = await fetch(API_BASE + '/health');
       const info = await response.json();
-      if (info && info.authRequired && !accessToken) {
-        await askAccessToken('');
+      if (!info || !info.authRequired) return;
+
+      // 本机存过口令：先让服务器验一次，别等发消息吃到 403 才发现是旧的
+      if (accessToken) {
+        const check = await fetch(API_BASE + '/auth-check', {
+          headers: { Authorization: 'Bearer ' + accessToken },
+        });
+        if (check.ok) return;
+        localStorage.removeItem(TOKEN_KEY);
+        accessToken = '';
+        await askAccessToken('本机保存的口令已失效，请重新输入');
+        return;
       }
+
+      await askAccessToken('');
     } catch (error) {
       // 健康检查失败不影响使用，真正发消息时会再要令牌
     }

@@ -590,6 +590,12 @@
             background: #89362a;
         }
 
+        .token-btn:disabled {
+            background: #d9cec0;
+            color: #fbf7f2;
+            cursor: not-allowed;
+        }
+
         /* ============ 轻提示 ============ */
         .toast {
             position: fixed;
@@ -756,7 +762,8 @@
             <div class="seal">坤</div>
             <h2>输入演示口令</h2>
             <p>这台服务器开了访问保护，口令只保存在本机浏览器，不会上传。</p>
-            <input id="token-input" type="password" placeholder="演示口令" autocomplete="current-password">
+            <input id="token-input" type="password" name="demo-access-token" placeholder="演示口令"
+                   autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
             <div class="token-error" id="token-error"></div>
             <button class="token-btn" id="token-submit" type="button">进入</button>
         </div>
@@ -792,6 +799,6 @@
 
     <div class="toast" id="toast"></div>
 
-    <script src="/app.js?v=20261127b"></script>
+    <script src="/app.js?v=20261127d"></script>
 </body>
 </html>

@@ -271,6 +271,12 @@ function createApp(config, deps = createDeps(config)) {
 
   const chatMiddleware = [authGuard, rateLimit].filter(Boolean);
 
+  // 前端进站时用它验证「本机存着的口令」还有效：一次廉价的鉴权探针，
+  // 免得旧口令先白跑一轮对话、吃一个 403 才弹口令框。
+  app.get('/api/auth-check', authGuard || ((req, res, next) => next()), (req, res) => {
+    res.json({ ok: true });
+  });
+
   // ---------------------------------------------------------------------
   // 静态地图代理：<img> 请求带不了 Authorization 头，所以用 HMAC 签名兜住，
   // 同时保证高德的 key 永远不出服务端。
