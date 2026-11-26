@@ -66,7 +66,10 @@ function loadConfig(env = process.env) {
     maxToolSteps: toInt('MAX_TOOL_STEPS', env.MAX_TOOL_STEPS, 5, { min: 1, max: 20 }),
     maxHistoryTurns: toInt('MAX_HISTORY_TURNS', env.MAX_HISTORY_TURNS, 20, { min: 1, max: 200 }),
     maxSessions: toInt('MAX_SESSIONS', env.MAX_SESSIONS, 500, { min: 1, max: 100_000 }),
-    sessionTtlMs: toInt('SESSION_TTL_MS', env.SESSION_TTL_MS, 2 * 60 * 60 * 1000, { min: 60_000 }),
+    // 会话落盘：重启 / pm2 reload 之后还能接着聊，不会突然"失忆"
+    sessionStorePath: (env.SESSION_STORE_PATH || '').trim() || path.join(ROOT_DIR, 'data', 'sessions.json'),
+    // 默认留 7 天；设 0 表示不按时间淘汰，只受 MAX_SESSIONS 限制
+    sessionTtlMs: toInt('SESSION_TTL_MS', env.SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1000, { min: 0 }),
 
     // 飞书云文档导出（可选）。app_id + app_secret 是自建应用凭证，
     // web_origin 形如 https://your-tenant.feishu.cn，用来拼文档链接。

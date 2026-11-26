@@ -8,6 +8,9 @@
  * 也就不会出现某些服务端报的 "tool message without preceding tool_calls"。
  */
 
+const fs = require('fs');
+const path = require('path');
+
 const SYSTEM_PROMPT = `你是「坤坤」，一个中文旅行管家。
 
 你可以调用以下工具获取真实数据：geocode（地址转坐标）、poi_search（搜地点）、
@@ -55,12 +58,109 @@ route_planning（规划路线）、weather（查天气）。
     跨天、整点附近很容易算错。票价和余票也只引用字段值。`;
 
 class SessionStore {
-  constructor({ maxSessions = 500, maxHistoryTurns = 20, ttlMs = 0, systemPrompt = SYSTEM_PROMPT } = {}) {
+  constructor({
+    maxSessions = 500,
+    maxHistoryTurns = 20,
+    ttlMs = 0,
+    systemPrompt = SYSTEM_PROMPT,
+    storePath = '',
+  } = {}) {
     this.maxSessions = maxSessions;
     this.maxHistoryTurns = maxHistoryTurns;
     this.ttlMs = ttlMs;
     this.systemPrompt = systemPrompt;
+    this.storePath = storePath;
     this.sessions = new Map();
+    this.saveTimer = null;
+    if (storePath) this.load();
+  }
+
+  // ---------------------------------------------------------------------
+  // 落盘：JSON 一个文件，写临时文件再 rename，断电也不会写坏
+  // ---------------------------------------------------------------------
+  load() {
+    let raw;
+    try {
+      raw = fs.readFileSync(this.storePath, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('[会话] 读取历史失败，从空开始：', error.message);
+      return 0;
+    }
+
+    try {
+      const data = JSON.parse(raw);
+      const saved = (data && data.sessions) || {};
+      // 按 updatedAt 升序放回 Map，保证淘汰时先淘汰最久没动的
+      const entries = Object.entries(saved)
+        .filter(([, item]) => item && Array.isArray(item.messages))
+        .sort((a, b) => (Number(a[1].updatedAt) || 0) - (Number(b[1].updatedAt) || 0));
+
+      for (const [id, item] of entries) {
+        const turns = item.messages.filter(
+          (msg) =>
+            msg &&
+            (msg.role === 'user' || msg.role === 'assistant') &&
+            typeof msg.content === 'string' &&
+            msg.content.trim()
+        );
+        if (!turns.length) continue;
+        this.sessions.set(id, {
+          // system 提示永远用当前代码里的，不用旧文件里的版本
+          messages: [{ role: 'system', content: this.systemPrompt }, ...turns.slice(-this.maxHistoryTurns * 2)],
+          activeSkills: new Set(Array.isArray(item.activeSkills) ? item.activeSkills : []),
+          createdAt: Number(item.createdAt) || Date.now(),
+          updatedAt: Number(item.updatedAt) || Date.now(),
+        });
+      }
+
+      while (this.sessions.size > this.maxSessions) {
+        this.sessions.delete(this.sessions.keys().next().value);
+      }
+      console.log(`[会话] 从磁盘恢复 ${this.sessions.size} 个会话`);
+      return this.sessions.size;
+    } catch (error) {
+      console.warn('[会话] 历史文件损坏，从空开始：', error.message);
+      return 0;
+    }
+  }
+
+  /** 攒一小会儿再写，连续对话不会每次都打一次磁盘。 */
+  scheduleSave() {
+    if (!this.storePath || this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.flush();
+    }, 500);
+    if (typeof this.saveTimer.unref === 'function') this.saveTimer.unref();
+  }
+
+  /** 立即落盘；进程退出前会调一次。 */
+  flush() {
+    if (!this.storePath) return;
+    try {
+      const payload = {};
+      for (const [id, session] of this.sessions) {
+        payload[id] = {
+          messages: session.messages,
+          activeSkills: [...(session.activeSkills || [])],
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        };
+      }
+      const body = JSON.stringify({ version: 1, savedAt: Date.now(), sessions: payload });
+      const dir = path.dirname(this.storePath);
+      fs.mkdirSync(dir, { recursive: true });
+      const tmp = `${this.storePath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, body, 'utf8');
+      fs.renameSync(tmp, this.storePath);
+      try {
+        fs.chmodSync(this.storePath, 0o600);
+      } catch {
+        // 某些文件系统不支持 chmod，忽略即可
+      }
+    } catch (error) {
+      console.warn('[会话] 写入历史失败：', error.message);
+    }
   }
 
   /** 取出会话（不存在则创建），顺手做一次过期淘汰和容量淘汰。 */
@@ -115,15 +215,19 @@ class SessionStore {
     const system = next[0];
     const rest = next.slice(1).slice(-this.maxHistoryTurns * 2);
     session.messages = [system, ...rest];
+    this.scheduleSave();
     return session;
   }
 
   delete(sessionId) {
-    return this.sessions.delete(sessionId);
+    const removed = this.sessions.delete(sessionId);
+    if (removed) this.scheduleSave();
+    return removed;
   }
 
   clear() {
     this.sessions.clear();
+    this.scheduleSave();
   }
 
   /** 清掉超过 TTL 没动过的会话；ttlMs <= 0 时不做任何事。 */
@@ -136,6 +240,7 @@ class SessionStore {
         removed += 1;
       }
     }
+    if (removed) this.scheduleSave();
     return removed;
   }
 

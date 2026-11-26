@@ -139,6 +139,7 @@ function createDeps(config) {
     maxSessions: config.maxSessions,
     maxHistoryTurns: config.maxHistoryTurns,
     ttlMs: config.sessionTtlMs,
+    storePath: config.sessionStorePath,
   });
 
   const agent = new Agent({ config, registry });
@@ -535,6 +536,12 @@ async function main() {
 
   const shutdown = (signal) => {
     console.log(`\n收到 ${signal}，正在关闭服务…`);
+    // 退出前把会话落盘，别让最后几轮对话丢掉
+    try {
+      deps.sessions.flush();
+    } catch (error) {
+      console.warn('[会话] 退出前保存失败：', error.message);
+    }
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5000).unref();
   };
